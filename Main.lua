@@ -13,8 +13,8 @@ Dependencies:
   Basic Chat Message module
 --]]
 
-local FSCI_VERBOSE = false
-local FSCI_DEBUG = false
+local FSCI_VERBOSE = true
+local FSCI_DEBUG = true
 local FSCI_DEBUGHEADER = "FSCI::"
 
 local FSCI_STATUS = { -- For logging to the import window via writeLog()
@@ -978,5 +978,37 @@ import.Register {
     text = function(importer, text)
         fsci = ThcForgeSteelCharacterImporter:new(importer, text)
         fsci:ImportToon()
+    end
+}
+
+local function debugWriteToFile(dto)
+    if CTIEUtils.inDebugMode() then
+        local jsonString = dto:ToJSON()
+        local writePath = "characters/" .. dmhub.gameid
+        local exportFilename = string.format("%s.json", dto:GetCharacterName())
+        dmhub.WriteTextFile(writePath, exportFilename, jsonString)
+    end
+end
+
+import.Register {
+    id = "thcfscijson2",
+    description = "Forge Steel Character II (JSON)",
+    input = "plaintext",
+    priority = 200,
+
+    text = function(importer, text)
+        local adapter = FSCIAdapter:new(text)
+        if adapter then
+            local codexDTO = adapter:Convert()
+            if codexDTO then
+                debugWriteToFile(codexDTO)
+                local ctieImporter = CTIEImporter:new(codexDTO)
+                ctieImporter:Import()
+            else
+                CTIEUtils.writeLog("!!!! Failed to convert Forge Steel character data!", CTIEUtils.STATUS.ERROR)
+            end
+        else
+            CTIEUtils.writeLog("!!!! Could not create Forge Steel adapter!", CTIEUtils.STATUS.ERROR)
+        end
     end
 }
