@@ -1834,16 +1834,32 @@ function FSCIAdapter:_convertSubclassFeatures(subclass, selectedFeaturesDTO)
                     self:_convertSubclassSkillChoice(feature, subclassSkillChoices, selectedFeaturesDTO)
 
                 elseif "class ability" == featureType and feature.data and feature.data.selectedIDs then
-                    -- Handle other subclass features (abilities, etc.) - existing logic
+                    -- Handle subclass abilities with selectedIDs
                     local lookupRecords = {}
                     for _, abilityId in ipairs(feature.data.selectedIDs) do
-                        -- Note: abilities would need similar processing as in _convertClassFeatures
                         writeLog(string.format("Found Subclass Ability [%s] in import.", abilityId), STATUS.INFO)
                         local abilityLookup = CTIELookupTableDTO:new()
                         abilityLookup:SetTableName(CTIEUtils.FEATURE_TABLE_MARKER)
                         abilityLookup:SetName(abilityId) -- Using ID as name for now
                         abilityLookup:SetID("")
                         table.insert(lookupRecords, abilityLookup)
+                    end
+
+                    if #lookupRecords > 0 then
+                        local selectedFeature = self:_createSelectedFeature(lookupRecords)
+                        selectedFeaturesDTO:AddFeature(selectedFeature)
+                    end
+
+                elseif "choice" == featureType and feature.data and feature.data.selected then
+                    -- Handle subclass choice features (like "Sentenced")
+                    local lookupRecords = {}
+                    for _, choice in ipairs(feature.data.selected) do
+                        writeLog(string.format("Found Subclass Choice [%s] in import.", choice.name or "?"), STATUS.INFO)
+                        local choiceLookup = CTIELookupTableDTO:new()
+                        choiceLookup:SetTableName(CTIEUtils.FEATURE_TABLE_MARKER)
+                        choiceLookup:SetName(translateFStoCodex(choice.name or ""))
+                        choiceLookup:SetID("")
+                        table.insert(lookupRecords, choiceLookup)
                     end
 
                     if #lookupRecords > 0 then
