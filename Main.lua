@@ -997,18 +997,11 @@ import.Register {
     priority = 200,
 
     text = function(importer, text)
-        local adapter = FSCIAdapter:new(text)
-        if adapter then
-            local codexDTO = adapter:Convert()
-            if codexDTO then
-                debugWriteToFile(codexDTO)
-                local ctieImporter = CTIEImporter:new(codexDTO)
-                ctieImporter:Import()
-            else
-                CTIEUtils.writeLog("!!!! Failed to convert Forge Steel character data!", CTIEUtils.STATUS.ERROR)
-            end
+        local importer = FSCIImporter:new(text)
+        if importer then
+            importer:Import()
         else
-            CTIEUtils.writeLog("!!!! Could not create Forge Steel adapter!", CTIEUtils.STATUS.ERROR)
+            CTIEUtils.writeLog("!!!! Could not create Forge Steel importer!", CTIEUtils.STATUS.ERROR)
         end
     end
 }

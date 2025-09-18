@@ -1,63 +1,406 @@
---- FSCIAdapter handles the conversion of Forge Steel character data to CTIE format.
---- This class parses Forge Steel JSON exports, translates the data using existing FSCI logic,
---- and populates a complete CTIECodexDTO object for import through the CTIE pipeline.
---- @class FSCIAdapter
+--- FSCIImporter handles importing a Forge Steel character into the Codex.
+--- @class FSCIImporter
 --- @field fsJson string The raw Forge Steel JSON string
 --- @field fsData table The parsed Forge Steel data structure
---- @field codexDTO CTIECodexDTO The CTIE Codex DTO object being populated
-FSCIAdapter = RegisterGameType("FSCIAdapter")
-FSCIAdapter.__index = FSCIAdapter
+--- @field token table The Codex token representing the new character
+--- @field character table The Codex character object - alias for token.character
+FSCIImporter = RegisterGameType("FSCIImporter")
+FSCIImporter.__index = FSCIImporter
 
-local writeDebug = CTIEUtils.writeDebug
-local writeLog = CTIEUtils.writeLog
-local STATUS = CTIEUtils.STATUS
+local tableLookupFromName = FSCIUtils.TableLookupFromName
+local writeDebug = FSCIUtils.writeDebug
+local writeLog = FSCIUtils.writeLog
+local STATUS = FSCIUtils.STATUS
+
+--- Creates a new FSCIImporter instance for importing a Forge Steel character into the Codex.
+--- @param jsonText string The JSON string from Forge Steel character export
+--- @return FSCIImporter|nil instance The new adapter instance if valid, nil if parsing fails
+function FSCIImporter:new(jsonText)
+    if not jsonText or #jsonText == 0 then
+        writeLog("!!!! Empty Forge Steel import file.", STATUS.WARN)
+        return nil
+    end
+
+    local parsedData = dmhub.FromJson(jsonText).result
+    if not parsedData then
+        writeLog("!!!! Invalid Forge Steel JSON format.", STATUS.WARN)
+        return nil
+    end
+
+    -- Basic validation - ensure it's Forge Steel format
+    if not parsedData.name or not parsedData.class then
+        writeLog("!!!! Not a valid Forge Steel character file.", STATUS.WARN)
+        return nil
+    end
+
+    local instance = setmetatable({}, self)
+    instance.fsJson = jsonText
+    instance.fsData = parsedData
+    instance.token = {}
+    instance.character = {}
+    return instance
+end
+
+function FSCIImporter:Import()
+    writeDebug("FSCIIMPORTER:: IMPORT:: START::")
+    writeLog("Import starting.")
+
+    self:_importTokenInfo()
+    self:_importCharacterInfo()
+
+    import:ImportCharacter(self.token)
+
+    writeLog("Import complete.")
+    writeDebug("FSCIIMPORTER:: IMPORT:: COMPLETE::")
+end
+
+function FSCIImporter:_importTokenInfo()
+    writeDebug("FSCIIMPORTER:: IMPORTTOKEN:: START::")
+    writeLog("Import Token starting.", STATUS.INFO, 1)
+
+    self.token = import:CreateCharacter()
+    self.token.properties = character.CreateNew()
+    self.token.partyId = GetDefaultPartyID()
+    self.token.name = self.fsData.name
+
+    writeLog(string.format("Character Name is [%s].", self.token.name), STATUS.IMPL)
+
+    writeLog("Import Token complete.", STATUS.INFO, -1)
+    writeDebug("FSCIIMPORTER:: IMPORTTOKEN:: COMPLETE::")
+end
+
+function FSCIImporter:_importCharacterInfo()
+    writeDebug("IMPORTCHARACTER:: START::")
+    writeLog("Import Character starting.", STATUS.INFO, 1)
+
+    self.character = self.token.properties
+
+    self:_importAttributes()
+    self:_importAncestry()
+    self:_importCulture()
+    self:_importCareer()
+    self:_importClass()
+    self:_setImport()
+
+    writeLog("Import Character complete.", STATUS.INFO, -1)
+    writeDebug("IMPORTCHARACTER:: COMPLETE::")
+end
+
+function FSCIImporter:_importAttributes()
+    writeDebug("IMPORTATTRIBUTES:: START::")
+    writeLog("Import Attributes starting.", STATUS.INFO, 1)
+
+    if self.fsData and self.fsData.class and self.fsData.class.characteristics then
+        local attrs = self.character:get_or_add("attributes", {})
+
+        local attributeMapping = {
+            Might = "mgt",
+            Agility = "agl",
+            Reason = "rea",
+            Intuition = "inu",
+            Presence = "prs"
+        }
+
+        -- Initialize all attributes with default values
+        for _, shortName in pairs(attributeMapping) do
+            if not attrs[shortName] then
+                attrs[shortName] = {
+                    baseValue = 0
+                }
+            end
+        end
+
+        -- Set values from characteristics array
+        for _, entry in ipairs(self.fsData.class.characteristics) do
+            local shortName = attributeMapping[entry.characteristic]
+            if shortName then
+                attrs[shortName].baseValue = entry.value
+            end
+        end
+        writeLog(string.format("Setting Attributes M %+d A %+d R %+d I %+d P %+d.", attrs.mgt.baseValue, attrs.agl.baseValue, attrs.rea.baseValue, attrs.inu.baseValue, attrs.prs.baseValue), STATUS.IMPL)
+    else
+        writeLog("!!!! Attributes not found in import.", STATUS.WARN)
+    end
+
+    writeLog("Import Attributes complete.", STATUS.INFO, -1)
+    writeDebug("IMPORTATTRIBUTES:: COMPLETE::")
+end
+
+function FSCIImporter:_importAncestry()
+    writeDebug("IMPORTANCESTRY:: START::")
+    writeLog("Import Ancestry starting.", STATUS.INFO, 1)
+
+    if self.fsData.ancestry then
+        local ancestryName = self.fsData.ancestry.name  
+        writeLog(string.format("Ancestry [%s] found in import.", ancestryName))
+        local codexRaceId, codexRaceItem = tableLookupFromName(Race.tableName, ancestryName)
+        if codexRaceId and codexRaceItem then
+            writeLog(string.format("Setting Ancestry to [%s].", codexRaceItem:try_get("name")), STATUS.IMPL)
+            local r = self.character:get_or_add("raceid", codexRaceId)
+            r = codexRaceId
+
+            if self.fsData.ancestry.features then
+                local codexFill = codexRaceItem:GetClassLevel()
+                writeDebug("RACEFILL:: %s", json(codexFill))
+                if codexFill then
+                    local choiceImporter = FSCIChoiceImporter:new(codexFill.features)
+                    if choiceImporter then
+                        local levelChoices = choiceImporter:Process(self.fsData.ancestry.features)
+                        FSCIUtils.MergeTables(self.character:GetLevelChoices(), levelChoices)
+                    end
+                end
+            else
+                writeLog("No ancestry choices to process.", STATUS.INFO)
+            end
+        else
+            writeLog(string.format("!!!! Ancestry [%s] not found in Codex.", ancestryName))
+        end
+    else
+        writeLog("!!!! Ancestry not found in import!", STATUS.WARN)
+    end
+
+    writeLog("Import Ancestry complete.", STATUS.INFO, -1)
+    writeDebug("IMPORTANCESTRY:: COMPLETE::")
+end
+
+function FSCIImporter:_importCareer()
+    writeDebug("IMPORTCAREER:: START::")
+    writeLog("Import Career starting.", STATUS.INFO, 1)
+
+    if self.fsData.career then
+        local fsCareer = self.fsData.career
+        writeLog(string.format("Found Career [%s] in import.", fsCareer.name))
+        local careerId, careerItem = tableLookupFromName(Background.tableName, fsCareer.name)
+        if careerId and careerItem then
+            writeLog(string.format("Setting Career to [%s].", fsCareer.name), STATUS.IMPL)
+            local backgroundId = self.character:get_or_add("backgroundid", careerId)
+            backgroundId = careerId
+
+            if fsCareer.features then
+                local careerFill = careerItem:GetClassLevel()
+                if careerFill then
+                    local choiceImporter = FSCIChoiceImporter:new(careerFill.features)
+                    if choiceImporter then
+                        local levelChoices = choiceImporter:Process(fsCareer.features)
+                        FSCIUtils.MergeTables(self.character:GetLevelChoices(), levelChoices)
+                    end
+                end
+            else
+                writeLog("No Career Features found.")
+            end
+
+            self:_importIncitingIncident(careerItem)
+        else
+            writeLog(string.format("!!!! Career [%s] not found in Codex!", fsCareer.name), STATUS.WARN)
+        end
+    else
+        writeLog("!!!! Career not found in import.", STATUS.WARN)
+    end
+
+    writeLog("Import Career complete.", STATUS.INFO, -1)
+    writeDebug("IMPORTCAREER:: COMPLETE::")
+end
+
+function FSCIImporter:_importClass()
+    writeDebug("IMPORTCLASS:: START::")
+    writeLog("Import Class starting.", STATUS.INFO, 1)
+
+    local function findSubclassName(subclasses)
+        for _, subclass in pairs(subclasses) do
+            if subclass.seleted then
+                return subclass.name
+            end
+        end
+    end
+
+    if self.fsData.class and self.fsData.class.name and self.fsData.class.level then
+        local className = self.fsData.class.name
+        local classLevel = self.fsData.class.level
+        writeLog(string.format("Found Class [%s] Level [%d] in import.", className, classLevel))
+
+        local classId, classInfo = tableLookupFromName(Class.tableName, className)
+        if classId and classInfo then
+            writeLog(string.format("Adding Class [%s] to character.", className), STATUS.IMPL)
+            local classes = self.character:get_or_add("classes", {})
+            classes[#classes + 1] = {
+                classid = classId,
+                level = classLevel
+            }
+
+            local classFill = {}
+            classInfo:FillLevelsUpTo(classLevel, false, "nonprimary", classFill)
+            writeDebug("IMPORTCLASS:: CLASSFILL:: %s", json(classFill))
+
+            local subclassName = findSubclassName(self.fsData.class.subclasses or {})
+            if subclassName and #subclassName then
+                local findSublass = { type = "Subclass", name = subclassName}
+                
+            end
+        else
+            writeLog(string.format("!!!! Class [%s] not found in Codex.", className), STATUS.WARN)
+        end
+    else
+        writeLog("!!!! Class information not found in import!", STATUS.WARN)
+    end
+
+    writeLog("Import Class complete.", STATUS.INFO, -1)
+    writeDebug("IMPORTCLASS:: COMPLETE::")
+end
+
+function FSCIImporter:_importCulture()
+    writeDebug("IMPORTCULTURE:: START::")
+    writeLog("Import Culture starting.", STATUS.INFO, 1)
+
+    if self.fsData.culture then
+        local fsCulture = self.fsData.culture
+
+        if fsCulture.languages then
+            for _, language in pairs(fsCulture.languages) do
+                writeLog(string.format("Found Language [%s] in import.", language))
+                local languageId = tableLookupFromName(Language.tableName, language)
+                if languageId then
+                    writeLog(string.format("Adding language [%s].", language), STATUS.IMPL)
+                    FSCIUtils.AppendToTable(self.character:GetLevelChoices(), "cultureLanguageChoice", languageId)
+                else
+                    writeLog(string.format("!!!! Language [%s] not found in Codex!", language), STATUS.WARN)
+                end
+            end
+        end
+
+        local aspectNames = { "environment", "organization", "upbringing" }
+        local codexCulture = self.character:get_or_add("culture", Culture.CreateNew())
+        local codexAspects = codexCulture:get_or_add("aspects")
+
+        for _, aspectName in pairs(aspectNames) do
+            if fsCulture[aspectName] then
+                local fsCultureSelection = fsCulture[aspectName].name
+                writeLog(string.format("Culture Aspect [%s]->[%s] starting.", aspectName, fsCultureSelection), STATUS.INFO, 1)
+                local caId, caItem = tableLookupFromName(CultureAspect.tableName, fsCultureSelection)
+                if caId and caItem then
+                    writeLog(string.format("Adding Culture Aspect [%s]->[%s]", aspectName, fsCultureSelection), STATUS.IMPL)
+                    codexAspects[aspectName] = caId
+                    if fsCulture[aspectName].data and fsCulture[aspectName].data.selected then
+                        local caFill = caItem:GetClassLevel()
+                        if caFill then
+                            local choiceImporter = FSCIChoiceImporter:new(caFill.features)
+                            if choiceImporter then
+                                local levelChoices = choiceImporter:Process({fsCulture[aspectName]})
+                                FSCIUtils.MergeTables(self.character:GetLevelChoices(), levelChoices)
+                            end
+                        end
+                    else
+                        writeLog(string.format("!!!! No features for Culture Aspect [%s]->[%s] in import!", aspectName, fsCultureSelection), STATUS.WARN)
+                    end
+                else
+                    writeLog(string.format("!!!! Culture Aspect [%s]->[%s] not found in Codex!", aspectName, fsCultureSelection), STATUS.WARN)
+                end
+                writeLog(string.format("Culture Aspect [%s] complete.", aspectName), STATUS.INFO, -1)
+            else
+                writeLog(string.format("!!!! Culture Aspect [%s] not in import!", aspectName), STATUS.WARN)
+            end
+        end
+    else
+        writeLog("!!!! Culture not found in import!", STATUS.WARN)
+    end
+
+    writeLog("Import Culture complete.", STATUS.INFO, -1)
+    writeDebug("IMPORTCULTURE:: COMPLETE::")
+end
+
+function FSCIImporter:_importIncitingIncident(careerItem)
+    writeDebug("IMPORTINCITINGINCIDENT:: START::")
+
+    local function incidentNamesMatch(needle, haystack)
+        local s = haystack:match("^%*%*:?(.-):?%*%*")
+        return FSCIUtils.SanitizedStringsMatch(needle, s)
+    end
+
+    if self.fsData.career and self.fsData.career.incitingIncidents and self.fsData.career.incitingIncidents.selectedID then
+        for _, incident in ipairs(self.fsData.career.incitingIncidents.options) do
+            if FSCIUtils.SanitizedStringsMatch(incident.id, self.fsData.career.incitingIncidents.selectedID) then
+                writeLog(string.format("Found Inciting Incident [%s] in import.", incident.name))
+
+                local foundMatch = false
+                for _, characteristic in pairs(careerItem.characteristics) do
+                    writeDebug(string.format("IMPORTINCITINGINCIDENT:: CHARACTERISTIC type [%s] table [%s]", characteristic.typeName, characteristic.tableid))
+                    if characteristic.typeName == "BackgroundCharacteristic" and characteristic.tableid ~= nil then
+                        local characteristicsTable = dmhub.GetTable(BackgroundCharacteristic.characteristicsTable)
+                        for _, row in pairs(characteristicsTable[characteristic.tableid].rows) do
+                            writeDebug(string.format("IMPORTINCITINGINCIDENT:: row[%s]", row.value.items[1].value))
+                            if incidentNamesMatch(incident.name, row.value.items[1].value) then
+                                writeLog(string.format("Adding Inciting Incident [%s] to character.", incident.name), STATUS.IMPL)
+
+                                local item = row.value.items[1]
+                                local note = {}
+                                note.text = item.value
+                                note.title = "Inciting Incident"
+                                note.rowid = row.id
+                                note.tableid = characteristic.tableid
+
+                                local notes = self.character:get_or_add("notes", {})
+                                notes[#notes + 1] = note
+
+                                foundMatch = true
+                                break
+                            end
+                        end
+                        if foundMatch then break end
+                    end
+                end
+                break
+            end
+        end
+    else
+        writeLog("!!!! Inciting Incident not found in import!", STATUS.WARN)
+    end
+
+    writeDebug("IMPORTINCITINGINCIDENT:: COMPELTE::")
+end
+
+function FSCIImporter:_setImport()
+    if not FSCIUtils.inDebugMode() then
+        writeLog("Setting Import.", STATUS.IMPL)
+        local i = self.character:get_or_add("import", {})
+        i.type = "mcdm"
+        i.data = self.fsJson
+    end
+end
 
 --- Translate strings from Forge Steel names to Codex names.
 local FSCI_TRANSLATIONS = {
     -- Ancestries
-    ["Elf (high)"]              = "Elf, High",
-    ["Elf (wode)"]              = "Elf, Wode",
-
+    ["Elf (high)"] = "Elf, High",
+    ["Elf (wode)"] = "Elf, Wode",
     -- Ancestry Features
-    ["Draconic Pride"]          = "Draconian Pride",
-    ["Perseverence"]            = "Perseverance",
-    ["Resist the Unnatural"]    = "Resist the Supernatural",
-
+    ["Draconic Pride"] = "Draconian Pride",
+    ["Perseverence"] = "Perseverance",
+    ["Resist the Unnatural"] = "Resist the Supernatural",
     -- Choice Types
-    ["Elementalist Ward"]       = "Ward",
-
+    ["Elementalist Ward"] = "Ward",
     -- Classes & Subclasses
-    ["Chronokinetic"]           = "Disciple of the Chronokinetic",
-    ["Cryokinetic"]             = "Disciple of the Cryokinetic",
-    ["Metakinetic"]             = "Disciple of the Metakinetic",
-
+    ["Chronokinetic"] = "Disciple of the Chronokinetic",
+    ["Cryokinetic"] = "Disciple of the Cryokinetic",
+    ["Metakinetic"] = "Disciple of the Metakinetic",
     -- Abilities
-    ["Motivate Earth"]          = "Manipulate Earth",               -- Remove when Codex Data is fixed
-    ["Halt, Miscreant!"]        = "Halt Miscreant!",
-
+    ["Motivate Earth"] = "Manipulate Earth", -- Remove when Codex Data is fixed
+    ["Halt, Miscreant!"] = "Halt Miscreant!",
     -- Feats
-    ["I've Got You"]            = "I've Got You!",
-    ["Teamwork"]                = "Team Backbone",                  -- Remove when Codex Data is fixed
-
-    ["Prayer"]                  = "Prayers",
-
+    ["I've Got You"] = "I've Got You!",
+    ["Teamwork"] = "Team Backbone", -- Remove when Codex Data is fixed
+    ["Prayer"] = "Prayers",
     -- Inciting Incidents
-    ["Near-Death Experience"]   = "Near Death Experience",
-
+    ["Near-Death Experience"] = "Near Death Experience",
     -- Kits
-    ["Rapid Fire"]              = "Rapid-Fire",
-    
+    ["Rapid Fire"] = "Rapid-Fire",
     -- Languages
-    ["Anjali"]                  = "Anjal",                          -- Remove when Codex Data is fixed
-    ["Yllric"]                  = "Yllyric",
-
+    ["Anjali"] = "Anjal", -- Remove when Codex Data is fixed
+    ["Yllric"] = "Yllyric",
     -- Psionic Augmentations & Wards
-    ["Battle Augmentation"]     = "Battle Augmentation ",
-    ["Steel Ward"]              = "Steel Ward ",
-    ["Talent Ward"]             = "Ward",
-
+    ["Battle Augmentation"] = "Battle Augmentation ",
+    ["Steel Ward"] = "Steel Ward ",
+    ["Talent Ward"] = "Ward",
     -- Skills
-    ["Perform"]                 = "Performance",
+    ["Perform"] = "Performance"
 }
 
 --- Performs fuzzy string matching between sanitized, translated strings.
@@ -87,6 +430,15 @@ end
 local function translateFStoCodex(fsString)
     return FSCI_TRANSLATIONS[fsString] or fsString
 end
+
+--- FSCIAdapter handles the conversion of Forge Steel character data to CTIE format.
+--- This class parses Forge Steel JSON exports, translates the data using existing FSCI logic,
+--- and populates a complete CTIECodexDTO object for import through the CTIE pipeline.
+--- @class FSCIAdapter
+--- @field fsJson string The raw Forge Steel JSON string
+--- @field fsData table The parsed Forge Steel data structure
+FSCIAdapter = RegisterGameType("FSCIAdapter")
+FSCIAdapter.__index = FSCIAdapter
 
 --- Creates a new FSCIAdapter instance for converting Forge Steel character data to CTIE format.
 --- Parses and validates the provided JSON text from Forge Steel exports and initializes
@@ -154,7 +506,7 @@ function FSCIAdapter:_createLookupRecord(tableName, name)
     local lookupRecord = CTIELookupTableDTO:new()
     lookupRecord:SetTableName(tableName)
     lookupRecord:SetName(translatedName)
-    
+
     -- Try to find GUID using fuzzy matching
     local itemFound = import:GetExistingItem(tableName, translatedName)
     if itemFound then
@@ -162,7 +514,7 @@ function FSCIAdapter:_createLookupRecord(tableName, name)
         writeDebug("LOOKUP:: FOUND GUID [%s] for [%s] in [%s]", itemFound.id, translatedName, tableName)
         return lookupRecord
     end
-    
+
     -- Fallback to fuzzy search in table
     local t = dmhub.GetTable(tableName) or {}
     for id, row in pairs(t) do
@@ -172,7 +524,7 @@ function FSCIAdapter:_createLookupRecord(tableName, name)
             return lookupRecord
         end
     end
-    
+
     writeLog(string.format("!!!! Unable to resolve [%s] in table [%s].", translatedName, tableName), STATUS.WARN)
     lookupRecord:SetID("") -- Empty GUID for later resolution
     return lookupRecord
@@ -185,14 +537,14 @@ end
 function FSCIAdapter:_getChoiceTypeFromTableName(tableName)
     local tableToChoiceMap = {
         [Deity.tableName] = "CharacterDeityChoice",
-        [CharacterFeat.tableName] = "CharacterFeatChoice", 
+        [CharacterFeat.tableName] = "CharacterFeatChoice",
         ["feats"] = "CharacterFeatChoice", -- Handle the "feats" alias used for perks
         [CTIEUtils.FEATURE_TABLE_MARKER] = "CharacterFeatureChoice",
         [Language.tableName] = "CharacterLanguageChoice",
         [Skill.tableName] = "CharacterSkillChoice",
         ["subclasses"] = "CharacterSubclassChoice"
     }
-    
+
     return tableToChoiceMap[tableName] or "CharacterFeatureChoice"
 end
 
@@ -239,7 +591,7 @@ function FSCIAdapter:_convertAttributes()
     local attributesDTO = self.codexDTO:Character():Attributes()
     local charMap = {
         Might = "mgt",
-        Agility = "agl", 
+        Agility = "agl",
         Reason = "rea",
         Intuition = "inu",
         Presence = "prs"
@@ -250,7 +602,7 @@ function FSCIAdapter:_convertAttributes()
         if key then
             writeDebug("CONVERTATTRIBUTES:: SET:: %s => %+d", key, entry.value)
             writeLog(string.format("Setting Attribute %s to %+d.", key, entry.value), STATUS.INFO)
-            
+
             -- Set attribute value using appropriate method
             if key == "mgt" then
                 attributesDTO:SetMgt(entry.value)
@@ -287,13 +639,13 @@ function FSCIAdapter:_convertAncestry()
     writeLog(string.format("Ancestry [%s] found in import.", raceInfo.name), STATUS.INFO)
 
     local ancestryDTO = self.codexDTO:Character():Ancestry()
-    
+
     -- Set race lookup record
     local raceLookup = self:_createLookupRecord(Race.tableName, raceInfo.name)
     ancestryDTO:GuidLookup():SetTableName(raceLookup:GetTableName())
     ancestryDTO:GuidLookup():SetName(raceLookup:GetName())
     ancestryDTO:GuidLookup():SetID(raceLookup:GetID())
-    
+
     -- Process ancestry features
     if raceInfo.features then
         self:_convertAncestryFeatures(raceInfo.features, ancestryDTO:SelectedFeatures())
@@ -331,29 +683,31 @@ function FSCIAdapter:_convertAncestryFeatures(features, selectedFeaturesDTO)
 
     for _, feature in ipairs(features) do
         local featureType = string.lower(feature.type or "")
-        
+
         if "choice" == featureType and feature.data and feature.data.selected then
             -- Handle choice-based features - group all selections from the same choice
             local lookupRecords = {}
             for _, choice in ipairs(feature.data.selected) do
                 local choiceName = mapFSOptionToCodex(choice)
-                writeLog(string.format("Found Ancestry Feature [%s]->[%s] in import.", choice.name or "?", choiceName), STATUS.INFO)
-                
+                writeLog(
+                    string.format("Found Ancestry Feature [%s]->[%s] in import.", choice.name or "?", choiceName),
+                    STATUS.INFO
+                )
+
                 -- Create a feature lookup record - these are special markers for later resolution
                 local lookupRecord = CTIELookupTableDTO:new()
                 lookupRecord:SetTableName(CTIEUtils.FEATURE_TABLE_MARKER)
                 lookupRecord:SetName(choiceName)
                 lookupRecord:SetID("") -- Empty GUID for features
-                
+
                 table.insert(lookupRecords, lookupRecord)
             end
-            
+
             -- Create a single selected feature with all selections grouped together
             if #lookupRecords > 0 then
                 local selectedFeature = self:_createSelectedFeature(lookupRecords)
                 selectedFeaturesDTO:AddFeature(selectedFeature)
             end
-            
         elseif "skill choice" == featureType and feature.data and feature.data.selected then
             -- Handle skill choices - group all selections from the same choice
             local lookupRecords = {}
@@ -362,13 +716,12 @@ function FSCIAdapter:_convertAncestryFeatures(features, selectedFeaturesDTO)
                 local skillLookup = self:_createLookupRecord(Skill.tableName, skillName)
                 table.insert(lookupRecords, skillLookup)
             end
-            
+
             -- Create a single selected feature with all selections grouped together
             if #lookupRecords > 0 then
                 local selectedFeature = self:_createSelectedFeature(lookupRecords)
                 selectedFeaturesDTO:AddFeature(selectedFeature)
             end
-            
         elseif "perk" == featureType and feature.data and feature.data.selected then
             -- Handle perk choices - group all selections from the same choice
             local lookupRecords = {}
@@ -377,13 +730,12 @@ function FSCIAdapter:_convertAncestryFeatures(features, selectedFeaturesDTO)
                 local perkLookup = self:_createLookupRecord("feats", perk.name)
                 table.insert(lookupRecords, perkLookup)
             end
-            
+
             -- Create a single selected feature with all selections grouped together
             if #lookupRecords > 0 then
                 local selectedFeature = self:_createSelectedFeature(lookupRecords)
                 selectedFeaturesDTO:AddFeature(selectedFeature)
             end
-            
         elseif "multiple features" == featureType and feature.data and feature.data.features then
             -- Handle nested features recursively
             writeDebug("CONVERTANCESTRYFEATURES:: MULTIPLEFEATURES::")
@@ -406,7 +758,7 @@ function FSCIAdapter:_convertCulture()
 
     local culture = self.fsData.culture
     local cultureDTO = self.codexDTO:Character():Culture()
-    
+
     -- Process culture languages (Forge Steel has multiple, CTIE expects one primary)
     if culture.languages and #culture.languages > 0 then
         local primaryLanguage = culture.languages[1] -- Take first language as primary
@@ -416,7 +768,7 @@ function FSCIAdapter:_convertCulture()
         cultureDTO:Language():SetName(languageLookup:GetName())
         cultureDTO:Language():SetID(languageLookup:GetID())
     end
-    
+
     -- Process culture aspects
     self:_convertCultureAspects(culture, cultureDTO)
 
@@ -431,7 +783,7 @@ end
 --- @param cultureDTO CTIECultureDTO The CTIE culture DTO to populate
 function FSCIAdapter:_convertCultureAspects(culture, cultureDTO)
     local aspectNames = {"environment", "organization", "upbringing"}
-    
+
     for _, aspectName in ipairs(aspectNames) do
         if culture[aspectName] then
             self:_convertCultureAspect(aspectName, culture[aspectName], cultureDTO)
@@ -460,13 +812,13 @@ function FSCIAdapter:_convertCultureAspect(aspectName, aspect, cultureDTO)
         writeLog(string.format("!!!! Unknown culture aspect [%s]", aspectName), STATUS.WARN, -1)
         return
     end
-    
+
     -- Set aspect lookup record
     local aspectLookup = self:_createLookupRecord(CultureAspect.tableName, aspect.name)
     aspectDTO:GuidLookup():SetTableName(aspectLookup:GetTableName())
     aspectDTO:GuidLookup():SetName(aspectLookup:GetName())
     aspectDTO:GuidLookup():SetID(aspectLookup:GetID())
-    
+
     -- Process aspect features (typically skill choices)
     if aspect.type and aspect.type:lower() == "skill choice" and aspect.data and aspect.data.selected then
         -- Handle skill choices - group all selections from the same choice
@@ -476,7 +828,7 @@ function FSCIAdapter:_convertCultureAspect(aspectName, aspect, cultureDTO)
             local skillLookup = self:_createLookupRecord(Skill.tableName, skillName)
             table.insert(lookupRecords, skillLookup)
         end
-        
+
         -- Create a single selected feature with all selections grouped together
         if #lookupRecords > 0 then
             local selectedFeature = self:_createSelectedFeature(lookupRecords)
@@ -493,7 +845,7 @@ end
 function FSCIAdapter:_convertCareer()
     writeDebug("CONVERTCAREER:: START::")
     writeLog("Parsing Career.", STATUS.INFO, 1)
-    
+
     if not self.fsData.career then
         writeLog("!!!! Career not found in import.", STATUS.WARN, -1)
         return
@@ -503,13 +855,13 @@ function FSCIAdapter:_convertCareer()
     writeLog(string.format("Found Career [%s] in import.", careerInfo.name), STATUS.INFO)
 
     local careerDTO = self.codexDTO:Character():Career()
-    
+
     -- Set background lookup record
     local backgroundLookup = self:_createLookupRecord(Background.tableName, careerInfo.name)
     careerDTO:GuidLookup():SetTableName(backgroundLookup:GetTableName())
     careerDTO:GuidLookup():SetName(backgroundLookup:GetName())
     careerDTO:GuidLookup():SetID(backgroundLookup:GetID())
-    
+
     -- Process career features (languages, perks, skills, etc.)
     if careerInfo.features then
         self:_convertCareerFeatures(careerInfo.features, careerDTO:SelectedFeatures())
@@ -533,7 +885,7 @@ function FSCIAdapter:_convertIncitingIncident(incitingIncidents, careerDTO)
         writeLog("!!!! No inciting incident selected.", STATUS.WARN)
         return
     end
-    
+
     for _, option in ipairs(incitingIncidents.options or {}) do
         if string.lower(option.id) == string.lower(incitingIncidents.selectedID) then
             writeLog(string.format("Found Inciting Incident [%s] in import.", option.name), STATUS.INFO)
@@ -542,9 +894,9 @@ function FSCIAdapter:_convertIncitingIncident(incitingIncidents, careerDTO)
             incidentLookup:SetTableName("IncitingIncident")
             incidentLookup:SetName(translateFStoCodex(option.name))
             incidentLookup:SetID("")
-            
+
             careerDTO:IncitingIncident():SetTableName(incidentLookup:GetTableName())
-            careerDTO:IncitingIncident():SetName(incidentLookup:GetName()) 
+            careerDTO:IncitingIncident():SetName(incidentLookup:GetName())
             careerDTO:IncitingIncident():SetID(incidentLookup:GetID())
             break
         end
@@ -558,7 +910,7 @@ end
 function FSCIAdapter:_convertCareerFeatures(features, selectedFeaturesDTO)
     for _, feature in ipairs(features) do
         local featureType = string.lower(feature.type or "")
-        
+
         if "language choice" == featureType and feature.data and feature.data.selected then
             -- Handle language choices - group all selections from the same choice
             local lookupRecords = {}
@@ -567,13 +919,12 @@ function FSCIAdapter:_convertCareerFeatures(features, selectedFeaturesDTO)
                 local languageLookup = self:_createLookupRecord(Language.tableName, languageName)
                 table.insert(lookupRecords, languageLookup)
             end
-            
+
             -- Create a single selected feature with all selections grouped together
             if #lookupRecords > 0 then
                 local selectedFeature = self:_createSelectedFeature(lookupRecords)
                 selectedFeaturesDTO:AddFeature(selectedFeature)
             end
-            
         elseif "perk" == featureType and feature.data and feature.data.selected then
             -- Handle perk choices - group all selections from the same choice
             local lookupRecords = {}
@@ -582,13 +933,12 @@ function FSCIAdapter:_convertCareerFeatures(features, selectedFeaturesDTO)
                 local perkLookup = self:_createLookupRecord("feats", perk.name)
                 table.insert(lookupRecords, perkLookup)
             end
-            
+
             -- Create a single selected feature with all selections grouped together
             if #lookupRecords > 0 then
                 local selectedFeature = self:_createSelectedFeature(lookupRecords)
                 selectedFeaturesDTO:AddFeature(selectedFeature)
             end
-            
         elseif "skill choice" == featureType and feature.data and feature.data.selected then
             -- Handle skill choices - group all selections from the same choice
             local lookupRecords = {}
@@ -597,7 +947,7 @@ function FSCIAdapter:_convertCareerFeatures(features, selectedFeaturesDTO)
                 local skillLookup = self:_createLookupRecord(Skill.tableName, skillName)
                 table.insert(lookupRecords, skillLookup)
             end
-            
+
             -- Create a single selected feature with all selections grouped together
             if #lookupRecords > 0 then
                 local selectedFeature = self:_createSelectedFeature(lookupRecords)
@@ -613,7 +963,7 @@ end
 function FSCIAdapter:_convertClass()
     writeDebug("CONVERTCLASS:: START::")
     writeLog("Parsing Class.", STATUS.INFO, 1)
-    
+
     if not self.fsData.class then
         writeLog("!!!! Class not found in import.", STATUS.WARN, -1)
         return
@@ -623,21 +973,21 @@ function FSCIAdapter:_convertClass()
     writeLog(string.format("Found Class [%s] Level [%d] in import.", classInfo.name, classInfo.level or 1), STATUS.INFO)
 
     local classDTO = self.codexDTO:Character():Class()
-    
+
     -- Set class lookup record
     local classLookup = self:_createLookupRecord(Class.tableName, classInfo.name)
     classDTO:GuidLookup():SetTableName(classLookup:GetTableName())
     classDTO:GuidLookup():SetName(classLookup:GetName())
     classDTO:GuidLookup():SetID(classLookup:GetID())
-    
+
     -- Set class level
     classDTO:SetLevel(classInfo.level or 1)
-    
+
     -- Process class features
     if classInfo.featuresByLevel then
         self:_convertClassFeatures(classInfo.featuresByLevel, classInfo.abilities, classDTO:SelectedFeatures())
     end
-    
+
     -- Process subclasses
     if classInfo.subclasses then
         self:_convertSubclasses(classInfo.subclasses, classDTO:SelectedFeatures())
@@ -657,31 +1007,33 @@ function FSCIAdapter:_convertClassFeatures(featuresByLevel, abilities, selectedF
         if levelFeature.features then
             for _, feature in ipairs(levelFeature.features) do
                 local featureType = string.lower(feature.type or "")
-                
+
                 if "class ability" == featureType and feature.data and feature.data.selectedIDs then
                     -- Map ability IDs to ability names, then find in Codex - group all selections from the same choice
                     local lookupRecords = {}
                     for _, abilityId in ipairs(feature.data.selectedIDs) do
                         for _, ability in ipairs(abilities or {}) do
                             if ability.id == abilityId then
-                                writeLog(string.format("Found Class Ability [%s] in import.", ability.name), STATUS.INFO)
+                                writeLog(
+                                    string.format("Found Class Ability [%s] in import.", ability.name),
+                                    STATUS.INFO
+                                )
                                 local abilityLookup = CTIELookupTableDTO:new()
                                 abilityLookup:SetTableName(CTIEUtils.FEATURE_TABLE_MARKER)
                                 abilityLookup:SetName(translateFStoCodex(ability.name))
                                 abilityLookup:SetID("")
-                                
+
                                 table.insert(lookupRecords, abilityLookup)
                                 break
                             end
                         end
                     end
-                    
+
                     -- Create a single selected feature with all abilities grouped together
                     if #lookupRecords > 0 then
                         local selectedFeature = self:_createSelectedFeature(lookupRecords)
                         selectedFeaturesDTO:AddFeature(selectedFeature)
                     end
-                    
                 elseif "choice" == featureType and feature.data and feature.data.selected then
                     -- Handle choice-based features - group all selections from the same choice
                     local lookupRecords = {}
@@ -691,16 +1043,15 @@ function FSCIAdapter:_convertClassFeatures(featuresByLevel, abilities, selectedF
                         choiceLookup:SetTableName(CTIEUtils.FEATURE_TABLE_MARKER)
                         choiceLookup:SetName(translateFStoCodex(choice.name or ""))
                         choiceLookup:SetID("")
-                        
+
                         table.insert(lookupRecords, choiceLookup)
                     end
-                    
+
                     -- Create a single selected feature with all selections grouped together
                     if #lookupRecords > 0 then
                         local selectedFeature = self:_createSelectedFeature(lookupRecords)
                         selectedFeaturesDTO:AddFeature(selectedFeature)
                     end
-                    
                 elseif "perk" == featureType and feature.data and feature.data.selected then
                     -- Handle perk choices - group all selections from the same choice
                     local lookupRecords = {}
@@ -709,36 +1060,52 @@ function FSCIAdapter:_convertClassFeatures(featuresByLevel, abilities, selectedF
                         local perkLookup = self:_createLookupRecord("feats", perk.name)
                         table.insert(lookupRecords, perkLookup)
                     end
-                    
+
                     -- Create a single selected feature with all selections grouped together
                     if #lookupRecords > 0 then
                         local selectedFeature = self:_createSelectedFeature(lookupRecords)
                         selectedFeaturesDTO:AddFeature(selectedFeature)
                     end
-                    
                 elseif "skill choice" == featureType and feature.data then
                     -- Handle class skill choices with real GUID lookup
-                    writeDebug("PROCESSCLASS:: Found skill choice feature [%s] with selected skills: %s", feature.name or "unnamed", json(feature.data.selected or {}))
+                    writeDebug(
+                        "PROCESSCLASS:: Found skill choice feature [%s] with selected skills: %s",
+                        feature.name or "unnamed",
+                        json(feature.data.selected or {})
+                    )
                     self:_convertClassSkillChoice(feature, selectedFeaturesDTO)
-
                 elseif "domain" == featureType and feature.data and feature.data.selected then
                     -- Handle domain choices - create domain selections and default deity
                     self:_convertDomains(feature.data.selected, selectedFeaturesDTO)
-
                 elseif "domain feature" == featureType and feature.data and feature.data.selected then
                     -- Handle domain feature choices - process selected domain features which may contain skill choices
-                    writeDebug("PROCESSCLASS:: Found domain feature choice with %d selected features", #(feature.data.selected or {}))
+                    writeDebug(
+                        "PROCESSCLASS:: Found domain feature choice with %d selected features",
+                        #(feature.data.selected or {})
+                    )
                     for _, selectedDomainFeature in ipairs(feature.data.selected) do
-                        writeDebug("PROCESSCLASS:: Processing domain feature [%s] of type [%s]", selectedDomainFeature.name or "unnamed", selectedDomainFeature.type or "unknown")
+                        writeDebug(
+                            "PROCESSCLASS:: Processing domain feature [%s] of type [%s]",
+                            selectedDomainFeature.name or "unnamed",
+                            selectedDomainFeature.type or "unknown"
+                        )
 
                         -- Extract domain name from the selectedDomainFeature ID or name
                         local domainName = self:_extractDomainNameFromFeature(selectedDomainFeature)
                         writeDebug("PROCESSCLASS:: Extracted domain name: [%s]", domainName or "unknown")
 
-                        if selectedDomainFeature.type and string.lower(selectedDomainFeature.type) == "multiple features" and
-                           selectedDomainFeature.data and selectedDomainFeature.data.features then
+                        if
+                            selectedDomainFeature.type and
+                                string.lower(selectedDomainFeature.type) == "multiple features" and
+                                selectedDomainFeature.data and
+                                selectedDomainFeature.data.features
+                         then
                             -- Process the nested features within the selected domain feature with domain context
-                            self:_processNestedDomainFeatures(selectedDomainFeature.data.features, domainName, selectedFeaturesDTO)
+                            self:_processNestedDomainFeatures(
+                                selectedDomainFeature.data.features,
+                                domainName,
+                                selectedFeaturesDTO
+                            )
                         end
                     end
                 end
@@ -763,8 +1130,11 @@ function FSCIAdapter:_extractDomainNameFromFeature(selectedDomainFeature)
     end
 
     -- Fallback: try to extract from name if ID extraction fails
-    writeDebug("EXTRACTDOMAIN:: Could not extract domain from ID [%s], trying name [%s]",
-              selectedDomainFeature.id or "nil", selectedDomainFeature.name or "nil")
+    writeDebug(
+        "EXTRACTDOMAIN:: Could not extract domain from ID [%s], trying name [%s]",
+        selectedDomainFeature.id or "nil",
+        selectedDomainFeature.name or "nil"
+    )
     return nil
 end
 
@@ -774,37 +1144,64 @@ end
 --- @param domainName string The domain name these features belong to
 --- @param selectedFeaturesDTO CTIESelectedFeaturesDTO The selected features DTO to populate
 function FSCIAdapter:_processNestedDomainFeatures(features, domainName, selectedFeaturesDTO)
-    writeDebug("PROCESSNESTEDOMAIN:: Processing [%d] nested features for domain [%s]", #features, domainName or "unknown")
+    writeDebug(
+        "PROCESSNESTEDOMAIN:: Processing [%d] nested features for domain [%s]",
+        #features,
+        domainName or "unknown"
+    )
 
     for i, feature in ipairs(features) do
         local featureType = string.lower(feature.type or "")
-        writeDebug("PROCESSNESTEDOMAIN:: Feature [%d/%d]: id=[%s] name=[%s] type=[%s] in domain [%s]",
-                  i, #features, feature.id or "nil", feature.name or "unnamed", featureType, domainName or "unknown")
+        writeDebug(
+            "PROCESSNESTEDOMAIN:: Feature [%d/%d]: id=[%s] name=[%s] type=[%s] in domain [%s]",
+            i,
+            #features,
+            feature.id or "nil",
+            feature.name or "unnamed",
+            featureType,
+            domainName or "unknown"
+        )
 
         if "skill choice" == featureType and feature.data then
             -- Handle nested skill choices as domain skill choices with domain context
             local skillNames = feature.data.selected or {}
             local listOptions = feature.data.listOptions or {}
-            writeDebug("PROCESSNESTEDOMAIN:: SKILL CHOICE found: feature=[%s] skills=[%s] listOptions=[%s] domain=[%s]",
-                      feature.name or "unnamed", table.concat(skillNames, ", "), table.concat(listOptions, ", "), domainName or "unknown")
+            writeDebug(
+                "PROCESSNESTEDOMAIN:: SKILL CHOICE found: feature=[%s] skills=[%s] listOptions=[%s] domain=[%s]",
+                feature.name or "unnamed",
+                table.concat(skillNames, ", "),
+                table.concat(listOptions, ", "),
+                domainName or "unknown"
+            )
 
             -- Validate domain name before processing
             if not domainName or domainName == "" then
-                writeLog(string.format("!!!! Missing domain name for skill choice [%s], skills: %s", feature.name or "unnamed", table.concat(skillNames, ", ")), STATUS.WARN)
+                writeLog(
+                    string.format(
+                        "!!!! Missing domain name for skill choice [%s], skills: %s",
+                        feature.name or "unnamed",
+                        table.concat(skillNames, ", ")
+                    ),
+                    STATUS.WARN
+                )
                 return
             end
 
             self:_convertDomainSkillChoiceWithContext(feature, domainName, selectedFeaturesDTO)
-
         elseif "multiple features" == featureType and feature.data and feature.data.features then
             -- Recursively process further nested features
-            writeDebug("PROCESSNESTEDOMAIN:: Recursing into [%d] nested features in domain [%s]",
-                      #(feature.data.features or {}), domainName or "unknown")
+            writeDebug(
+                "PROCESSNESTEDOMAIN:: Recursing into [%d] nested features in domain [%s]",
+                #(feature.data.features or {}),
+                domainName or "unknown"
+            )
             self:_processNestedDomainFeatures(feature.data.features, domainName, selectedFeaturesDTO)
-
         else
-            writeDebug("PROCESSNESTEDOMAIN:: Skipping feature [%s] of type [%s] (not skill choice or multiple features)",
-                      feature.name or "unnamed", featureType)
+            writeDebug(
+                "PROCESSNESTEDOMAIN:: Skipping feature [%s] of type [%s] (not skill choice or multiple features)",
+                feature.name or "unnamed",
+                featureType
+            )
         end
     end
 
@@ -818,14 +1215,21 @@ end
 function FSCIAdapter:_processNestedClassFeatures(features, selectedFeaturesDTO)
     for _, feature in ipairs(features) do
         local featureType = string.lower(feature.type or "")
-        writeDebug("PROCESSNESTEDCLASS:: Processing nested feature [%s] of type [%s]", feature.name or "unnamed", featureType)
+        writeDebug(
+            "PROCESSNESTEDCLASS:: Processing nested feature [%s] of type [%s]",
+            feature.name or "unnamed",
+            featureType
+        )
 
         if "skill choice" == featureType and feature.data then
             -- Handle nested skill choices as class skill choices
             local skillNames = feature.data.selected or {}
-            writeDebug("PROCESSNESTEDCLASS:: Found skill choice feature [%s] with selected skills: %s", feature.name or "unnamed", table.concat(skillNames, ", "))
+            writeDebug(
+                "PROCESSNESTEDCLASS:: Found skill choice feature [%s] with selected skills: %s",
+                feature.name or "unnamed",
+                table.concat(skillNames, ", ")
+            )
             self:_convertClassSkillChoice(feature, selectedFeaturesDTO)
-
         elseif "multiple features" == featureType and feature.data and feature.data.features then
             -- Recursively process further nested features
             self:_processNestedClassFeatures(feature.data.features, selectedFeaturesDTO)
@@ -859,7 +1263,10 @@ function FSCIAdapter:_convertDomains(selectedDomains, selectedFeaturesDTO)
         -- Fall back to synthetic ID if real GUID cannot be found
         local syntheticDeityId = "forge-steel-deity-" .. tostring(os.time())
         domainChoiceId = syntheticDeityId .. "-domains"
-        writeLog(string.format("!!!! Could not find deity choice GUID, using synthetic ID [%s].", syntheticDeityId), STATUS.WARN)
+        writeLog(
+            string.format("!!!! Could not find deity choice GUID, using synthetic ID [%s].", syntheticDeityId),
+            STATUS.WARN
+        )
     end
 
     -- Create domain lookup records
@@ -929,9 +1336,12 @@ function FSCIAdapter:_processDomainLevelFeatures(features, domainFeatures, selec
 
         if "skill choice" == featureType and feature.data then
             -- Handle domain skill choices using direct search like class skills
-            writeDebug("PROCESSDOMAIN:: Found skill choice feature [%s] with selected skills: %s", feature.name or "unnamed", json(feature.data.selected or {}))
+            writeDebug(
+                "PROCESSDOMAIN:: Found skill choice feature [%s] with selected skills: %s",
+                feature.name or "unnamed",
+                json(feature.data.selected or {})
+            )
             self:_convertDomainSkillChoice(feature, domainFeatures, selectedFeaturesDTO)
-
         elseif "multiple features" == featureType and feature.data and feature.data.features then
             -- Recursively process nested features
             self:_processDomainLevelFeatures(feature.data.features, domainFeatures, selectedFeaturesDTO)
@@ -951,7 +1361,10 @@ function FSCIAdapter:_getDomainFeatures(domainName)
     writeDebug("GETDOMAINFEATURES:: Domain validation for [%s]: GUID [%s]", domainName, domainGuid or "nil")
 
     if not domainGuid or not domainItem then
-        writeLog(string.format("!!!! Could not resolve domain GUID for [%s], continuing with empty features", domainName), STATUS.WARN)
+        writeLog(
+            string.format("!!!! Could not resolve domain GUID for [%s], continuing with empty features", domainName),
+            STATUS.WARN
+        )
         return {}
     end
 
@@ -961,13 +1374,22 @@ function FSCIAdapter:_getDomainFeatures(domainName)
 
     local classGuid = CTIEUtils.ResolveLookupRecord(Class.tableName, className, "")
     if not classGuid or #classGuid == 0 then
-        writeLog(string.format("!!!! Could not resolve class GUID for [%s], continuing with empty features", className), STATUS.WARN)
+        writeLog(
+            string.format("!!!! Could not resolve class GUID for [%s], continuing with empty features", className),
+            STATUS.WARN
+        )
         return {}
     end
 
     local classTable = dmhub.GetTable(Class.tableName)
     if not classTable or not classTable[classGuid] then
-        writeLog(string.format("!!!! Could not find class definition for GUID [%s], continuing with empty features", classGuid), STATUS.WARN)
+        writeLog(
+            string.format(
+                "!!!! Could not find class definition for GUID [%s], continuing with empty features",
+                classGuid
+            ),
+            STATUS.WARN
+        )
         return {}
     end
 
@@ -983,39 +1405,71 @@ function FSCIAdapter:_getDomainFeatures(domainName)
     local domainFeatures = {}
     for levelNum, levelData in pairs(classLevels) do
         if levelData.features then
-            writeDebug("CONVERTDOMAINWITHCONTEXT:: GETDOMAINFEATURES:: Searching class level [%d] with [%d] features for domain [%s]", levelNum, #levelData.features, domainName)
+            writeDebug(
+                "CONVERTDOMAINWITHCONTEXT:: GETDOMAINFEATURES:: Searching class level [%d] with [%d] features for domain [%s]",
+                levelNum,
+                #levelData.features,
+                domainName
+            )
 
             local domainLevelFeatures = {}
             for i, feature in ipairs(levelData.features) do
                 -- Look for features with names ending in "Domain Feature"
                 local featureName = feature.name or ""
-                writeDebug("CONVERTDOMAINWITHCONTEXT:: GETDOMAINFEATURES:: Checking feature [%s] for 'Domain Feature' pattern", featureName)
+                writeDebug(
+                    "CONVERTDOMAINWITHCONTEXT:: GETDOMAINFEATURES:: Checking feature [%s] for 'Domain Feature' pattern",
+                    featureName
+                )
 
                 if string.match(featureName, "Domain Feature$") then
-                    writeDebug("CONVERTDOMAINWITHCONTEXT:: GETDOMAINFEATURES:: Found domain feature: [%s] at level [%d]", featureName, levelNum)
+                    writeDebug(
+                        "CONVERTDOMAINWITHCONTEXT:: GETDOMAINFEATURES:: Found domain feature: [%s] at level [%d]",
+                        featureName,
+                        levelNum
+                    )
 
                     -- Look for nested features within this domain feature
                     if feature.features then
-                        writeDebug("CONVERTDOMAINWITHCONTEXT:: GETDOMAINFEATURES:: Searching [%d] nested features in [%s] for domain [%s]", #feature.features, featureName, domainName)
+                        writeDebug(
+                            "CONVERTDOMAINWITHCONTEXT:: GETDOMAINFEATURES:: Searching [%d] nested features in [%s] for domain [%s]",
+                            #feature.features,
+                            featureName,
+                            domainName
+                        )
 
                         for j, nestedFeature in ipairs(feature.features) do
                             local nestedFeatureName = nestedFeature.name or ""
                             local expectedDomainFeatureName = domainName .. " Domain"
 
-                            writeDebug("CONVERTDOMAINWITHCONTEXT:: GETDOMAINFEATURES:: Checking nested feature [%s] against expected [%s]", nestedFeatureName, expectedDomainFeatureName)
+                            writeDebug(
+                                "CONVERTDOMAINWITHCONTEXT:: GETDOMAINFEATURES:: Checking nested feature [%s] against expected [%s]",
+                                nestedFeatureName,
+                                expectedDomainFeatureName
+                            )
 
                             -- Look for features named "[DomainName] Domain" (e.g., "War Domain")
                             if nestedFeatureName == expectedDomainFeatureName then
-                                writeDebug("CONVERTDOMAINWITHCONTEXT:: GETDOMAINFEATURES:: MATCH! Found [%s] domain feature", domainName)
+                                writeDebug(
+                                    "CONVERTDOMAINWITHCONTEXT:: GETDOMAINFEATURES:: MATCH! Found [%s] domain feature",
+                                    domainName
+                                )
 
                                 -- Process the features under this matching domain
                                 if nestedFeature.features then
-                                    writeDebug("CONVERTDOMAINWITHCONTEXT:: GETDOMAINFEATURES:: Processing [%d] features under [%s]", #nestedFeature.features, expectedDomainFeatureName)
+                                    writeDebug(
+                                        "CONVERTDOMAINWITHCONTEXT:: GETDOMAINFEATURES:: Processing [%d] features under [%s]",
+                                        #nestedFeature.features,
+                                        expectedDomainFeatureName
+                                    )
 
                                     for k, domainSpecificFeature in ipairs(nestedFeature.features) do
                                         table.insert(domainLevelFeatures, domainSpecificFeature)
-                                        writeDebug("CONVERTDOMAINWITHCONTEXT:: GETDOMAINFEATURES:: Added domain-specific feature: type=[%s] guid=[%s] name=[%s]",
-                                                  domainSpecificFeature.typeName or "nil", domainSpecificFeature.guid or "nil", domainSpecificFeature.name or "nil")
+                                        writeDebug(
+                                            "CONVERTDOMAINWITHCONTEXT:: GETDOMAINFEATURES:: Added domain-specific feature: type=[%s] guid=[%s] name=[%s]",
+                                            domainSpecificFeature.typeName or "nil",
+                                            domainSpecificFeature.guid or "nil",
+                                            domainSpecificFeature.name or "nil"
+                                        )
 
                                         -- Log skill choice features specifically with their categories
                                         if domainSpecificFeature.typeName == "CharacterSkillChoice" then
@@ -1027,29 +1481,51 @@ function FSCIAdapter:_getDomainFeatures(domainName)
                                                     end
                                                 end
                                             end
-                                            writeDebug("CONVERTDOMAINWITHCONTEXT:: GETDOMAINFEATURES:: DOMAIN SKILLCHOICE L%d: guid=[%s] categories=[%s] for domain [%s]",
-                                                      levelNum, domainSpecificFeature.guid, table.concat(categories, ","), domainName)
+                                            writeDebug(
+                                                "CONVERTDOMAINWITHCONTEXT:: GETDOMAINFEATURES:: DOMAIN SKILLCHOICE L%d: guid=[%s] categories=[%s] for domain [%s]",
+                                                levelNum,
+                                                domainSpecificFeature.guid,
+                                                table.concat(categories, ","),
+                                                domainName
+                                            )
                                         end
                                     end
                                 else
-                                    writeDebug("CONVERTDOMAINWITHCONTEXT:: GETDOMAINFEATURES:: No features found under [%s]", expectedDomainFeatureName)
+                                    writeDebug(
+                                        "CONVERTDOMAINWITHCONTEXT:: GETDOMAINFEATURES:: No features found under [%s]",
+                                        expectedDomainFeatureName
+                                    )
                                 end
                             end
                         end
                     else
-                        writeDebug("CONVERTDOMAINWITHCONTEXT:: GETDOMAINFEATURES:: No nested features found in domain feature [%s]", featureName)
+                        writeDebug(
+                            "CONVERTDOMAINWITHCONTEXT:: GETDOMAINFEATURES:: No nested features found in domain feature [%s]",
+                            featureName
+                        )
                     end
                 end
             end
 
             if #domainLevelFeatures > 0 then
-                table.insert(domainFeatures, { level = levelNum, features = domainLevelFeatures })
-                writeDebug("CONVERTDOMAINWITHCONTEXT:: GETDOMAINFEATURES:: Level [%d] has [%d] domain features, total levels with features: [%d]", levelNum, #domainLevelFeatures, #domainFeatures)
+                table.insert(domainFeatures, {level = levelNum, features = domainLevelFeatures})
+                writeDebug(
+                    "CONVERTDOMAINWITHCONTEXT:: GETDOMAINFEATURES:: Level [%d] has [%d] domain features, total levels with features: [%d]",
+                    levelNum,
+                    #domainLevelFeatures,
+                    #domainFeatures
+                )
             end
         end
     end
 
-    writeDebug("CONVERTDOMAINWITHCONTEXT:: GETDOMAINFEATURES:: LOADED:: [%d] [%s] [%s] %s", #domainFeatures, domainName, className, json(domainFeatures))
+    writeDebug(
+        "CONVERTDOMAINWITHCONTEXT:: GETDOMAINFEATURES:: LOADED:: [%d] [%s] [%s] %s",
+        #domainFeatures,
+        domainName,
+        className,
+        json(domainFeatures)
+    )
     return domainFeatures
 end
 
@@ -1065,14 +1541,20 @@ function FSCIAdapter:_findDomainSkillChoiceFeatures(domainName)
     -- First, resolve the domain GUID (domains are stored as subclasses)
     local domainGuid = CTIEUtils.ResolveLookupRecord("subclasses", domainName, "")
     if not domainGuid or #domainGuid == 0 then
-        writeLog(string.format("!!!! Could not resolve domain GUID for [%s], continuing with fallback", domainName), STATUS.WARN)
+        writeLog(
+            string.format("!!!! Could not resolve domain GUID for [%s], continuing with fallback", domainName),
+            STATUS.WARN
+        )
         return skillChoiceMap
     end
 
     -- Get the domain definition
     local subclassTable = dmhub.GetTable("subclasses")
     if not subclassTable or not subclassTable[domainGuid] then
-        writeLog(string.format("!!!! Could not find domain definition for GUID [%s], continuing with fallback", domainGuid), STATUS.WARN)
+        writeLog(
+            string.format("!!!! Could not find domain definition for GUID [%s], continuing with fallback", domainGuid),
+            STATUS.WARN
+        )
         return skillChoiceMap
     end
 
@@ -1090,7 +1572,12 @@ function FSCIAdapter:_findDomainSkillChoiceFeatures(domainName)
                 if feature.typeName == "CharacterSkillChoice" then
                     local categoryKey = self:_createCategoryKey(feature.categories)
                     skillChoiceMap[categoryKey] = feature.guid
-                    writeDebug("FINDDOMAINSKILLCHOICES:: Found skill choice feature [%s] with categories [%s] at level [%d]", feature.guid, categoryKey, levelNum)
+                    writeDebug(
+                        "FINDDOMAINSKILLCHOICES:: Found skill choice feature [%s] with categories [%s] at level [%d]",
+                        feature.guid,
+                        categoryKey,
+                        levelNum
+                    )
                 end
 
                 -- Also search nested features
@@ -1103,7 +1590,9 @@ function FSCIAdapter:_findDomainSkillChoiceFeatures(domainName)
     end
 
     local count = 0
-    for _ in pairs(skillChoiceMap) do count = count + 1 end
+    for _ in pairs(skillChoiceMap) do
+        count = count + 1
+    end
     writeLog(string.format("Found %d skill choice features for domain [%s]", count, domainName), STATUS.INFO)
     return skillChoiceMap
 end
@@ -1120,8 +1609,13 @@ function FSCIAdapter:_convertDomainSkillChoiceWithContext(feature, domainName, s
     end
 
     local skillNames = feature.data.selected or {}
-    writeDebug("CONVERTDOMAINWITHCONTEXT:: Processing skill choice [%s] with %d selected skills: %s in domain [%s]",
-              feature.name or "unnamed", #skillNames, table.concat(skillNames, ", "), domainName)
+    writeDebug(
+        "CONVERTDOMAINWITHCONTEXT:: Processing skill choice [%s] with %d selected skills: %s in domain [%s]",
+        feature.name or "unnamed",
+        #skillNames,
+        table.concat(skillNames, ", "),
+        domainName
+    )
 
     for _, skillName in ipairs(skillNames) do
         writeDebug("CONVERTDOMAINWITHCONTEXT:: Processing individual skill: [%s] in domain [%s]", skillName, domainName)
@@ -1131,12 +1625,22 @@ function FSCIAdapter:_convertDomainSkillChoiceWithContext(feature, domainName, s
     local domainFeatures = self:_getDomainFeatures(domainName)
     if not domainFeatures or #domainFeatures == 0 then
         writeDebug("CONVERTDOMAINWITHCONTEXT:: NODOMAINFEATURES:: %s", domainName)
-        writeLog(string.format("!!!! Could not get domain features for [%s] (empty or nil result), discarding skill choice for skills: %s",
-                              domainName, table.concat(skillNames, ", ")), STATUS.WARN)
+        writeLog(
+            string.format(
+                "!!!! Could not get domain features for [%s] (empty or nil result), discarding skill choice for skills: %s",
+                domainName,
+                table.concat(skillNames, ", ")
+            ),
+            STATUS.WARN
+        )
         return
     end
 
-    writeDebug("CONVERTDOMAINWITHCONTEXT:: Successfully retrieved [%d] domain levels for [%s]", #domainFeatures, domainName)
+    writeDebug(
+        "CONVERTDOMAINWITHCONTEXT:: Successfully retrieved [%d] domain levels for [%s]",
+        #domainFeatures,
+        domainName
+    )
 
     -- Output each skill name with the levelFill JSON for debugging
     for _, skillName in ipairs(skillNames) do
@@ -1149,30 +1653,61 @@ function FSCIAdapter:_convertDomainSkillChoiceWithContext(feature, domainName, s
 
     -- Find matching domain skill choice feature GUID using domain-specific level fill search
     local choiceId = self:_findDomainSkillChoiceGuid(domainFeatures, listOptions, skillNames)
-    writeDebug("CONVERTDOMAINWITHCONTEXT:: choiceId lookup result: [%s] for listOptions: %s and skills: %s in domain [%s]",
-              tostring(choiceId), json(listOptions), table.concat(skillNames, ", "), domainName)
+    writeDebug(
+        "CONVERTDOMAINWITHCONTEXT:: choiceId lookup result: [%s] for listOptions: %s and skills: %s in domain [%s]",
+        tostring(choiceId),
+        json(listOptions),
+        table.concat(skillNames, ", "),
+        domainName
+    )
 
     if not choiceId then
-        writeLog(string.format("!!!! Could not find domain skill choice feature for categories [%s] in domain [%s], discarding skill choice", categories, domainName), STATUS.WARN)
+        writeLog(
+            string.format(
+                "!!!! Could not find domain skill choice feature for categories [%s] in domain [%s], discarding skill choice",
+                categories,
+                domainName
+            ),
+            STATUS.WARN
+        )
         return -- Discard this skill choice completely
     end
 
     -- Create skill lookup records
     local lookupRecords = {}
     for _, skillName in ipairs(feature.data.selected or {}) do
-        writeDebug("CONVERTDOMAINWITHCONTEXT:: Creating lookup record for skill: [%s] in domain [%s]", skillName, domainName)
-        writeLog(string.format("Found Domain Skill [%s] in import for domain [%s].", skillName, domainName), STATUS.INFO)
+        writeDebug(
+            "CONVERTDOMAINWITHCONTEXT:: Creating lookup record for skill: [%s] in domain [%s]",
+            skillName,
+            domainName
+        )
+        writeLog(
+            string.format("Found Domain Skill [%s] in import for domain [%s].", skillName, domainName),
+            STATUS.INFO
+        )
         local skillLookup = self:_createLookupRecord(Skill.tableName, skillName)
         table.insert(lookupRecords, skillLookup)
-        writeDebug("CONVERTDOMAINWITHCONTEXT:: Added lookup record for skill [%s] to list (now %d records)", skillName, #lookupRecords)
+        writeDebug(
+            "CONVERTDOMAINWITHCONTEXT:: Added lookup record for skill [%s] to list (now %d records)",
+            skillName,
+            #lookupRecords
+        )
     end
 
     -- Create selected feature with proper choiceId and categories
-    writeDebug("CONVERTDOMAINWITHCONTEXT:: About to create DTO with %d lookupRecords for skills: %s in domain [%s]",
-              #lookupRecords, table.concat(skillNames, ", "), domainName)
+    writeDebug(
+        "CONVERTDOMAINWITHCONTEXT:: About to create DTO with %d lookupRecords for skills: %s in domain [%s]",
+        #lookupRecords,
+        table.concat(skillNames, ", "),
+        domainName
+    )
     if #lookupRecords > 0 then
-        writeDebug("CONVERTDOMAINWITHCONTEXT:: Creating selectedFeature DTO with choiceId [%s] for skills: %s in domain [%s]",
-                  choiceId, table.concat(skillNames, ", "), domainName)
+        writeDebug(
+            "CONVERTDOMAINWITHCONTEXT:: Creating selectedFeature DTO with choiceId [%s] for skills: %s in domain [%s]",
+            choiceId,
+            table.concat(skillNames, ", "),
+            domainName
+        )
         local selectedFeature = CTIESelectedFeatureDTO:new()
         selectedFeature:SetChoiceType("CharacterSkillChoice")
         selectedFeature:SetChoiceId(choiceId) -- Set the domain-specific GUID
@@ -1185,19 +1720,40 @@ function FSCIAdapter:_convertDomainSkillChoiceWithContext(feature, domainName, s
         -- Add skill selections
         for _, lookupRecord in ipairs(lookupRecords) do
             selectedFeature:AddSelection(lookupRecord)
-            writeDebug("CONVERTDOMAINWITHCONTEXT:: Added selection: table=[%s] name=[%s] id=[%s]",
-                      lookupRecord:GetTableName(), lookupRecord:GetName(), lookupRecord:GetID())
+            writeDebug(
+                "CONVERTDOMAINWITHCONTEXT:: Added selection: table=[%s] name=[%s] id=[%s]",
+                lookupRecord:GetTableName(),
+                lookupRecord:GetName(),
+                lookupRecord:GetID()
+            )
         end
 
         selectedFeaturesDTO:AddFeature(selectedFeature)
-        writeDebug("CONVERTDOMAINWITHCONTEXT:: Successfully added selectedFeature to DTO for skills: %s in domain [%s]",
-                  table.concat(skillNames, ", "), domainName)
+        writeDebug(
+            "CONVERTDOMAINWITHCONTEXT:: Successfully added selectedFeature to DTO for skills: %s in domain [%s]",
+            table.concat(skillNames, ", "),
+            domainName
+        )
 
-        writeLog(string.format("Created domain skill feature with choiceId [%s] and categories [%s] for skills: %s in domain [%s].",
-                              choiceId, table.concat(listOptions, ","), table.concat(skillNames, ", "), domainName), STATUS.INFO)
+        writeLog(
+            string.format(
+                "Created domain skill feature with choiceId [%s] and categories [%s] for skills: %s in domain [%s].",
+                choiceId,
+                table.concat(listOptions, ","),
+                table.concat(skillNames, ", "),
+                domainName
+            ),
+            STATUS.INFO
+        )
     else
-        writeLog(string.format("Skipping domain skill feature with no selections for categories [%s] in domain [%s].",
-                              table.concat(listOptions, ","), domainName), STATUS.INFO)
+        writeLog(
+            string.format(
+                "Skipping domain skill feature with no selections for categories [%s] in domain [%s].",
+                table.concat(listOptions, ","),
+                domainName
+            ),
+            STATUS.INFO
+        )
     end
 end
 
@@ -1211,7 +1767,11 @@ function FSCIAdapter:_convertDomainSkillChoice(feature, domainFeatures, selected
         return
     end
 
-    writeDebug("CONVERTDOMAINSKILL:: Processing skill choice [%s] with %d selected skills", feature.name or "unnamed", #(feature.data.selected or {}))
+    writeDebug(
+        "CONVERTDOMAINSKILL:: Processing skill choice [%s] with %d selected skills",
+        feature.name or "unnamed",
+        #(feature.data.selected or {})
+    )
     for _, skillName in ipairs(feature.data.selected or {}) do
         writeDebug("CONVERTDOMAINSKILL:: Selected skill: [%s]", skillName)
     end
@@ -1223,7 +1783,13 @@ function FSCIAdapter:_convertDomainSkillChoice(feature, domainFeatures, selected
     -- Find matching domain skill choice feature GUID using direct search (like class skills)
     local choiceId = self:_findSkillChoiceInFeatures(domainFeatures, listOptions)
     if not choiceId then
-        writeLog(string.format("!!!! Could not find domain skill choice feature for categories [%s], discarding skill choice", categories), STATUS.WARN)
+        writeLog(
+            string.format(
+                "!!!! Could not find domain skill choice feature for categories [%s], discarding skill choice",
+                categories
+            ),
+            STATUS.WARN
+        )
         return -- Discard this skill choice completely
     end
 
@@ -1252,7 +1818,10 @@ function FSCIAdapter:_convertDomainSkillChoice(feature, domainFeatures, selected
 
         selectedFeaturesDTO:AddFeature(selectedFeature)
 
-        writeLog(string.format("Created domain skill feature with choiceId [%s] and categories [%s].", choiceId, categories), STATUS.INFO)
+        writeLog(
+            string.format("Created domain skill feature with choiceId [%s] and categories [%s].", choiceId, categories),
+            STATUS.INFO
+        )
     end
 end
 
@@ -1268,14 +1837,20 @@ function FSCIAdapter:_findDeityChoiceFeatureGuid(className)
     -- First, resolve the class GUID
     local classGuid = CTIEUtils.ResolveLookupRecord(Class.tableName, className, "")
     if not classGuid or #classGuid == 0 then
-        writeLog(string.format("!!!! Could not resolve class GUID for [%s], continuing with fallback", className), STATUS.WARN)
+        writeLog(
+            string.format("!!!! Could not resolve class GUID for [%s], continuing with fallback", className),
+            STATUS.WARN
+        )
         return nil
     end
 
     -- Get the class definition
     local classTable = dmhub.GetTable(Class.tableName)
     if not classTable or not classTable[classGuid] then
-        writeLog(string.format("!!!! Could not find class definition for GUID [%s], continuing with fallback", classGuid), STATUS.WARN)
+        writeLog(
+            string.format("!!!! Could not find class definition for GUID [%s], continuing with fallback", classGuid),
+            STATUS.WARN
+        )
         return nil
     end
 
@@ -1293,7 +1868,11 @@ function FSCIAdapter:_findDeityChoiceFeatureGuid(className)
             for _, feature in pairs(levelData.features) do
                 writeDebug("FINDDEITYFEATURE:: Checking feature [%s]", feature.typeName or "nil")
                 if feature.typeName == "CharacterDeityChoice" then
-                    writeDebug("FINDDEITYFEATURE:: Found deity choice feature [%s] at level [%d]", feature.guid, levelNum)
+                    writeDebug(
+                        "FINDDEITYFEATURE:: Found deity choice feature [%s] at level [%d]",
+                        feature.guid,
+                        levelNum
+                    )
                     writeLog(string.format("Found deity choice feature for class [%s]", className), STATUS.INFO)
                     return feature.guid
                 end
@@ -1308,7 +1887,10 @@ function FSCIAdapter:_findDeityChoiceFeatureGuid(className)
         end
     end
 
-    writeLog(string.format("!!!! No deity choice feature found in class [%s], continuing with fallback", className), STATUS.WARN)
+    writeLog(
+        string.format("!!!! No deity choice feature found in class [%s], continuing with fallback", className),
+        STATUS.WARN
+    )
     return nil
 end
 
@@ -1355,14 +1937,20 @@ function FSCIAdapter:_findSkillChoiceFeatures(className)
     -- First, resolve the class GUID
     local classGuid = CTIEUtils.ResolveLookupRecord(Class.tableName, className, "")
     if not classGuid or #classGuid == 0 then
-        writeLog(string.format("!!!! Could not resolve class GUID for [%s], continuing with fallback", className), STATUS.WARN)
+        writeLog(
+            string.format("!!!! Could not resolve class GUID for [%s], continuing with fallback", className),
+            STATUS.WARN
+        )
         return skillChoiceMap
     end
 
     -- Get the class definition
     local classTable = dmhub.GetTable(Class.tableName)
     if not classTable or not classTable[classGuid] then
-        writeLog(string.format("!!!! Could not find class definition for GUID [%s], continuing with fallback", classGuid), STATUS.WARN)
+        writeLog(
+            string.format("!!!! Could not find class definition for GUID [%s], continuing with fallback", classGuid),
+            STATUS.WARN
+        )
         return skillChoiceMap
     end
 
@@ -1380,7 +1968,12 @@ function FSCIAdapter:_findSkillChoiceFeatures(className)
                     -- Create category key from feature categories
                     local categoryKey = self:_createCategoryKey(feature.categories)
                     skillChoiceMap[categoryKey] = feature.guid
-                    writeDebug("FINDSKILLCHOICES:: Found skill choice feature [%s] with categories [%s] at level [%d]", feature.guid, categoryKey, levelNum)
+                    writeDebug(
+                        "FINDSKILLCHOICES:: Found skill choice feature [%s] with categories [%s] at level [%d]",
+                        feature.guid,
+                        categoryKey,
+                        levelNum
+                    )
                 end
 
                 -- Also search nested features recursively
@@ -1393,7 +1986,9 @@ function FSCIAdapter:_findSkillChoiceFeatures(className)
     end
 
     local count = 0
-    for _ in pairs(skillChoiceMap) do count = count + 1 end
+    for _ in pairs(skillChoiceMap) do
+        count = count + 1
+    end
     writeLog(string.format("Found %d skill choice features for class [%s]", count, className), STATUS.INFO)
     return skillChoiceMap
 end
@@ -1484,7 +2079,12 @@ function FSCIAdapter:_convertClassSkillChoice(feature, selectedFeaturesDTO)
     end
 
     local skillNames = feature.data.selected or {}
-    writeDebug("CONVERTCLASSSKILL:: Processing skill choice [%s] with %d selected skills: %s", feature.name or "unnamed", #skillNames, table.concat(skillNames, ", "))
+    writeDebug(
+        "CONVERTCLASSSKILL:: Processing skill choice [%s] with %d selected skills: %s",
+        feature.name or "unnamed",
+        #skillNames,
+        table.concat(skillNames, ", ")
+    )
     for _, skillName in ipairs(skillNames) do
         writeDebug("CONVERTCLASSSKILL:: Processing individual skill: [%s]", skillName)
     end
@@ -1503,9 +2103,20 @@ function FSCIAdapter:_convertClassSkillChoice(feature, selectedFeaturesDTO)
 
     -- Find matching skill choice feature using Main.lua's approach
     local choiceId = self:_findSkillChoiceInFeatures(classLevelsFill, listOptions)
-    writeDebug("CONVERTCLASSSKILL:: choiceId lookup result: [%s] for listOptions: %s and skills: %s", tostring(choiceId), json(listOptions), table.concat(skillNames, ", "))
+    writeDebug(
+        "CONVERTCLASSSKILL:: choiceId lookup result: [%s] for listOptions: %s and skills: %s",
+        tostring(choiceId),
+        json(listOptions),
+        table.concat(skillNames, ", ")
+    )
     if not choiceId then
-        writeLog(string.format("!!!! Could not find skill choice feature for categories [%s], discarding skill choice", table.concat(listOptions, ",")), STATUS.WARN)
+        writeLog(
+            string.format(
+                "!!!! Could not find skill choice feature for categories [%s], discarding skill choice",
+                table.concat(listOptions, ",")
+            ),
+            STATUS.WARN
+        )
         return -- Discard this skill choice completely
     end
 
@@ -1516,13 +2127,25 @@ function FSCIAdapter:_convertClassSkillChoice(feature, selectedFeaturesDTO)
         writeLog(string.format("Found Class Skill [%s] in import.", skillName), STATUS.INFO)
         local skillLookup = self:_createLookupRecord(Skill.tableName, skillName)
         table.insert(lookupRecords, skillLookup)
-        writeDebug("CONVERTCLASSSKILL:: Added lookup record for skill [%s] to list (now %d records)", skillName, #lookupRecords)
+        writeDebug(
+            "CONVERTCLASSSKILL:: Added lookup record for skill [%s] to list (now %d records)",
+            skillName,
+            #lookupRecords
+        )
     end
 
     -- Create selected feature with proper choiceId and categories - ONLY if we have actual selections
-    writeDebug("CONVERTCLASSSKILL:: About to create DTO with %d lookupRecords for skills: %s", #lookupRecords, table.concat(skillNames, ", "))
+    writeDebug(
+        "CONVERTCLASSSKILL:: About to create DTO with %d lookupRecords for skills: %s",
+        #lookupRecords,
+        table.concat(skillNames, ", ")
+    )
     if #lookupRecords > 0 then
-        writeDebug("CONVERTCLASSSKILL:: Creating selectedFeature DTO with choiceId [%s] for skills: %s", choiceId, table.concat(skillNames, ", "))
+        writeDebug(
+            "CONVERTCLASSSKILL:: Creating selectedFeature DTO with choiceId [%s] for skills: %s",
+            choiceId,
+            table.concat(skillNames, ", ")
+        )
         local selectedFeature = CTIESelectedFeatureDTO:new()
         selectedFeature:SetChoiceType("CharacterSkillChoice")
         selectedFeature:SetChoiceId(choiceId) -- Set the real GUID
@@ -1535,16 +2158,37 @@ function FSCIAdapter:_convertClassSkillChoice(feature, selectedFeaturesDTO)
         -- Add skill selections
         for _, lookupRecord in ipairs(lookupRecords) do
             selectedFeature:AddSelection(lookupRecord)
-            writeDebug("CONVERTCLASSSKILL:: Added selection: table=[%s] name=[%s] id=[%s]",
-                      lookupRecord:GetTableName(), lookupRecord:GetName(), lookupRecord:GetID())
+            writeDebug(
+                "CONVERTCLASSSKILL:: Added selection: table=[%s] name=[%s] id=[%s]",
+                lookupRecord:GetTableName(),
+                lookupRecord:GetName(),
+                lookupRecord:GetID()
+            )
         end
 
         selectedFeaturesDTO:AddFeature(selectedFeature)
-        writeDebug("CONVERTCLASSSKILL:: Successfully added selectedFeature to DTO for skills: %s", table.concat(skillNames, ", "))
+        writeDebug(
+            "CONVERTCLASSSKILL:: Successfully added selectedFeature to DTO for skills: %s",
+            table.concat(skillNames, ", ")
+        )
 
-        writeLog(string.format("Created class skill feature with choiceId [%s] and categories [%s] for skills: %s.", choiceId, table.concat(listOptions, ","), table.concat(skillNames, ", ")), STATUS.INFO)
+        writeLog(
+            string.format(
+                "Created class skill feature with choiceId [%s] and categories [%s] for skills: %s.",
+                choiceId,
+                table.concat(listOptions, ","),
+                table.concat(skillNames, ", ")
+            ),
+            STATUS.INFO
+        )
     else
-        writeLog(string.format("Skipping class skill feature with no selections for categories [%s].", table.concat(listOptions, ",")), STATUS.INFO)
+        writeLog(
+            string.format(
+                "Skipping class skill feature with no selections for categories [%s].",
+                table.concat(listOptions, ",")
+            ),
+            STATUS.INFO
+        )
     end
 end
 
@@ -1583,10 +2227,18 @@ end
 function FSCIAdapter:_searchNestedSkillChoices(features, listOptions, searchPath)
     for _, featureInfo in ipairs(features) do
         local currentPath = searchPath .. " -> " .. (featureInfo.name or featureInfo.guid or "unnamed")
-        writeDebug("SEARCHNESTED:: Checking feature at path: %s, type: %s", currentPath, featureInfo.typeName or "no-type")
+        writeDebug(
+            "SEARCHNESTED:: Checking feature at path: %s, type: %s",
+            currentPath,
+            featureInfo.typeName or "no-type"
+        )
 
         if featureInfo.typeName == "CharacterSkillChoice" then
-            writeDebug("SEARCHNESTED:: Found CharacterSkillChoice at path: %s with categories: %s", currentPath, json(featureInfo.categories))
+            writeDebug(
+                "SEARCHNESTED:: Found CharacterSkillChoice at path: %s with categories: %s",
+                currentPath,
+                json(featureInfo.categories)
+            )
 
             -- Check if categories match
             local matchesCategory = false
@@ -1596,7 +2248,11 @@ function FSCIAdapter:_searchNestedSkillChoices(features, listOptions, searchPath
                 for _, option in ipairs(listOptions) do
                     local categoryName = string.lower(option)
                     if featureInfo.categories and featureInfo.categories[categoryName] == true then
-                        writeDebug("SEARCHNESTED:: MATCH FOUND for category [%s] at path: %s", categoryName, currentPath)
+                        writeDebug(
+                            "SEARCHNESTED:: MATCH FOUND for category [%s] at path: %s",
+                            categoryName,
+                            currentPath
+                        )
                         matchesCategory = true
                         break
                     end
@@ -1644,8 +2300,12 @@ function FSCIAdapter:_findDomainSkillChoiceGuid(domainLevels, listOptions, skill
             writeDebug("FINDDOMAINGUID:: Checking level %d with %d features", levelNum, #levelData.features)
             for _, feature in pairs(levelData.features) do
                 if feature.typeName == "CharacterSkillChoice" then
-                    writeDebug("FINDDOMAINGUID:: Found CharacterSkillChoice feature [%s] at level %d with categories: %s",
-                              feature.guid or "no-guid", levelNum, json(feature.categories))
+                    writeDebug(
+                        "FINDDOMAINGUID:: Found CharacterSkillChoice feature [%s] at level %d with categories: %s",
+                        feature.guid or "no-guid",
+                        levelNum,
+                        json(feature.categories)
+                    )
 
                     -- Check if categories match
                     local matchesCategory = false
@@ -1654,7 +2314,10 @@ function FSCIAdapter:_findDomainSkillChoiceGuid(domainLevels, listOptions, skill
                     else
                         for _, option in ipairs(listOptions) do
                             local categoryName = string.lower(option)
-                            writeDebug("FINDDOMAINGUID:: Checking if category [%s] matches feature categories", categoryName)
+                            writeDebug(
+                                "FINDDOMAINGUID:: Checking if category [%s] matches feature categories",
+                                categoryName
+                            )
                             if feature.categories then
                                 -- Handle both array format [exploration] and boolean table format {exploration: true}
                                 local categoryMatch = false
@@ -1675,7 +2338,11 @@ function FSCIAdapter:_findDomainSkillChoiceGuid(domainLevels, listOptions, skill
                                 end
 
                                 if categoryMatch then
-                                    writeDebug("FINDDOMAINGUID:: MATCH FOUND for category [%s] in domain level %d", categoryName, levelNum)
+                                    writeDebug(
+                                        "FINDDOMAINGUID:: MATCH FOUND for category [%s] in domain level %d",
+                                        categoryName,
+                                        levelNum
+                                    )
                                     matchesCategory = true
                                     break
                                 end
@@ -1684,18 +2351,34 @@ function FSCIAdapter:_findDomainSkillChoiceGuid(domainLevels, listOptions, skill
                     end
 
                     if matchesCategory then
-                        writeDebug("FINDDOMAINGUID:: Returning matching domain feature [%s] for categories [%s]", feature.guid, table.concat(listOptions, ","))
+                        writeDebug(
+                            "FINDDOMAINGUID:: Returning matching domain feature [%s] for categories [%s]",
+                            feature.guid,
+                            table.concat(listOptions, ",")
+                        )
                         return feature.guid
                     else
-                        writeDebug("FINDDOMAINGUID:: No category match for domain feature [%s]", feature.guid or "no-guid")
+                        writeDebug(
+                            "FINDDOMAINGUID:: No category match for domain feature [%s]",
+                            feature.guid or "no-guid"
+                        )
                     end
                 end
 
                 -- Also search nested features recursively in domain features
                 local nestedFeatures = feature:try_get("features")
                 if nestedFeatures then
-                    writeDebug("FINDDOMAINGUID:: Searching nested features for domain level %d feature [%s]", levelNum, feature.guid or "no-guid")
-                    local nestedResult = self:_searchNestedSkillChoices(nestedFeatures, listOptions, string.format("DomainLevel%d", levelNum))
+                    writeDebug(
+                        "FINDDOMAINGUID:: Searching nested features for domain level %d feature [%s]",
+                        levelNum,
+                        feature.guid or "no-guid"
+                    )
+                    local nestedResult =
+                        self:_searchNestedSkillChoices(
+                        nestedFeatures,
+                        listOptions,
+                        string.format("DomainLevel%d", levelNum)
+                    )
                     if nestedResult then
                         return nestedResult
                     end
@@ -1721,8 +2404,12 @@ function FSCIAdapter:_findSkillChoiceInFeatures(classLevelsFill, listOptions)
         if levelData.features then
             for _, featureInfo in ipairs(levelData.features) do
                 if featureInfo.typeName == "CharacterSkillChoice" then
-                    writeDebug("FINDSKILLCHOICE:: Found CharacterSkillChoice feature [%s] at level %d with categories: %s",
-                              featureInfo.guid or "no-guid", levelNum, json(featureInfo.categories))
+                    writeDebug(
+                        "FINDSKILLCHOICE:: Found CharacterSkillChoice feature [%s] at level %d with categories: %s",
+                        featureInfo.guid or "no-guid",
+                        levelNum,
+                        json(featureInfo.categories)
+                    )
 
                     -- Check if categories match - Main.lua checks each category individually
                     local matchesCategory = false
@@ -1733,7 +2420,10 @@ function FSCIAdapter:_findSkillChoiceInFeatures(classLevelsFill, listOptions)
                         -- Check if any of the listOptions match the feature's categories
                         for _, option in ipairs(listOptions) do
                             local categoryName = string.lower(option)
-                            writeDebug("FINDSKILLCHOICE:: Checking if category [%s] matches feature categories", categoryName)
+                            writeDebug(
+                                "FINDSKILLCHOICE:: Checking if category [%s] matches feature categories",
+                                categoryName
+                            )
                             if featureInfo.categories and featureInfo.categories[categoryName] == true then
                                 writeDebug("FINDSKILLCHOICE:: MATCH FOUND for category [%s]", categoryName)
                                 matchesCategory = true
@@ -1743,18 +2433,30 @@ function FSCIAdapter:_findSkillChoiceInFeatures(classLevelsFill, listOptions)
                     end
 
                     if matchesCategory then
-                        writeDebug("FINDSKILLCHOICE:: Found matching feature [%s] for categories [%s]", featureInfo.guid, table.concat(listOptions, ","))
+                        writeDebug(
+                            "FINDSKILLCHOICE:: Found matching feature [%s] for categories [%s]",
+                            featureInfo.guid,
+                            table.concat(listOptions, ",")
+                        )
                         return featureInfo.guid
                     else
-                        writeDebug("FINDSKILLCHOICE:: No category match for feature [%s]", featureInfo.guid or "no-guid")
+                        writeDebug(
+                            "FINDSKILLCHOICE:: No category match for feature [%s]",
+                            featureInfo.guid or "no-guid"
+                        )
                     end
                 end
 
                 -- Search nested features recursively for ANY feature type
                 local nestedFeatures = featureInfo:try_get("features")
                 if nestedFeatures then
-                    writeDebug("FINDSKILLCHOICE:: Searching nested features for level %d feature [%s]", levelNum, featureInfo.guid or "no-guid")
-                    local nestedResult = self:_searchNestedSkillChoices(nestedFeatures, listOptions, string.format("Level%d", levelNum))
+                    writeDebug(
+                        "FINDSKILLCHOICE:: Searching nested features for level %d feature [%s]",
+                        levelNum,
+                        featureInfo.guid or "no-guid"
+                    )
+                    local nestedResult =
+                        self:_searchNestedSkillChoices(nestedFeatures, listOptions, string.format("Level%d", levelNum))
                     if nestedResult then
                         return nestedResult
                     end
@@ -1766,7 +2468,6 @@ function FSCIAdapter:_findSkillChoiceInFeatures(classLevelsFill, listOptions)
     writeDebug("FINDSKILLCHOICE:: NO MATCHING SKILL CHOICE FOUND for listOptions: %s", json(listOptions))
     return nil
 end
-
 
 --- Adds a default deity entry when domains are selected.
 --- @private
@@ -1801,7 +2502,7 @@ function FSCIAdapter:_convertSubclasses(subclasses, selectedFeaturesDTO)
             if selectedFeature then
                 selectedFeaturesDTO:AddFeature(selectedFeature)
             end
-            
+
             -- Process subclass features from featuresByLevel
             if subclass.featuresByLevel then
                 writeLog(string.format("Processing features for Subclass [%s].", subclass.name), STATUS.INFO, 1)
@@ -1832,7 +2533,6 @@ function FSCIAdapter:_convertSubclassFeatures(subclass, selectedFeaturesDTO)
                 if "skill choice" == featureType and feature.data then
                     -- Handle subclass skill choices with subclass-specific GUID lookup
                     self:_convertSubclassSkillChoice(feature, subclassSkillChoices, selectedFeaturesDTO)
-
                 elseif "class ability" == featureType and feature.data and feature.data.selectedIDs then
                     -- Handle subclass abilities with selectedIDs
                     local lookupRecords = {}
@@ -1849,12 +2549,14 @@ function FSCIAdapter:_convertSubclassFeatures(subclass, selectedFeaturesDTO)
                         local selectedFeature = self:_createSelectedFeature(lookupRecords)
                         selectedFeaturesDTO:AddFeature(selectedFeature)
                     end
-
                 elseif "choice" == featureType and feature.data and feature.data.selected then
                     -- Handle subclass choice features (like "Sentenced")
                     local lookupRecords = {}
                     for _, choice in ipairs(feature.data.selected) do
-                        writeLog(string.format("Found Subclass Choice [%s] in import.", choice.name or "?"), STATUS.INFO)
+                        writeLog(
+                            string.format("Found Subclass Choice [%s] in import.", choice.name or "?"),
+                            STATUS.INFO
+                        )
                         local choiceLookup = CTIELookupTableDTO:new()
                         choiceLookup:SetTableName(CTIEUtils.FEATURE_TABLE_MARKER)
                         choiceLookup:SetName(translateFStoCodex(choice.name or ""))
@@ -1884,14 +2586,23 @@ function FSCIAdapter:_findSubclassSkillChoiceFeatures(subclassName)
     -- First, resolve the subclass GUID
     local subclassGuid = CTIEUtils.ResolveLookupRecord("subclasses", subclassName, "")
     if not subclassGuid or #subclassGuid == 0 then
-        writeLog(string.format("!!!! Could not resolve subclass GUID for [%s], continuing with fallback", subclassName), STATUS.WARN)
+        writeLog(
+            string.format("!!!! Could not resolve subclass GUID for [%s], continuing with fallback", subclassName),
+            STATUS.WARN
+        )
         return skillChoiceMap
     end
 
     -- Get the subclass definition
     local subclassTable = dmhub.GetTable("subclasses")
     if not subclassTable or not subclassTable[subclassGuid] then
-        writeLog(string.format("!!!! Could not find subclass definition for GUID [%s], continuing with fallback", subclassGuid), STATUS.WARN)
+        writeLog(
+            string.format(
+                "!!!! Could not find subclass definition for GUID [%s], continuing with fallback",
+                subclassGuid
+            ),
+            STATUS.WARN
+        )
         return skillChoiceMap
     end
 
@@ -1908,7 +2619,12 @@ function FSCIAdapter:_findSubclassSkillChoiceFeatures(subclassName)
                 if feature.typeName == "CharacterSkillChoice" then
                     local categoryKey = self:_createCategoryKey(feature.categories)
                     skillChoiceMap[categoryKey] = feature.guid
-                    writeDebug("FINDSUBCLASSSKILLCHOICES:: Found skill choice feature [%s] with categories [%s] at level [%d]", feature.guid, categoryKey, levelNum)
+                    writeDebug(
+                        "FINDSUBCLASSSKILLCHOICES:: Found skill choice feature [%s] with categories [%s] at level [%d]",
+                        feature.guid,
+                        categoryKey,
+                        levelNum
+                    )
                 end
 
                 -- Also search nested features
@@ -1924,7 +2640,9 @@ function FSCIAdapter:_findSubclassSkillChoiceFeatures(subclassName)
     end
 
     local count = 0
-    for _ in pairs(skillChoiceMap) do count = count + 1 end
+    for _ in pairs(skillChoiceMap) do
+        count = count + 1
+    end
     writeLog(string.format("Found %d skill choice features for subclass [%s]", count, subclassName), STATUS.INFO)
     return skillChoiceMap
 end
@@ -1946,7 +2664,13 @@ function FSCIAdapter:_convertSubclassSkillChoice(feature, subclassSkillChoices, 
     -- Find matching subclass skill choice feature GUID
     local choiceId = subclassSkillChoices[categoryKey]
     if not choiceId then
-        writeLog(string.format("!!!! Could not find subclass skill choice feature for categories [%s], discarding skill choice", categoryKey), STATUS.WARN)
+        writeLog(
+            string.format(
+                "!!!! Could not find subclass skill choice feature for categories [%s], discarding skill choice",
+                categoryKey
+            ),
+            STATUS.WARN
+        )
         return -- Discard this skill choice completely
     end
 
@@ -1975,7 +2699,14 @@ function FSCIAdapter:_convertSubclassSkillChoice(feature, subclassSkillChoices, 
 
         selectedFeaturesDTO:AddFeature(selectedFeature)
 
-        writeLog(string.format("Created subclass skill feature with choiceId [%s] and categories [%s].", choiceId, categoryKey), STATUS.INFO)
+        writeLog(
+            string.format(
+                "Created subclass skill feature with choiceId [%s] and categories [%s].",
+                choiceId,
+                categoryKey
+            ),
+            STATUS.INFO
+        )
     end
 end
 
@@ -1985,10 +2716,10 @@ end
 function FSCIAdapter:_convertKits()
     writeDebug("CONVERTKITS:: START::")
     writeLog("Parsing Kits.", STATUS.INFO, 1)
-    
+
     local kitDTO = self.codexDTO:Character():Kit()
     local kitCount = 0
-    
+
     -- Look for kits in class features
     if self.fsData.class and self.fsData.class.featuresByLevel then
         for _, levelFeature in ipairs(self.fsData.class.featuresByLevel) do
@@ -1999,9 +2730,9 @@ function FSCIAdapter:_convertKits()
                             if kit and kit.name then
                                 kitCount = kitCount + 1
                                 writeLog(string.format("Found Kit [%s] in import.", kit.name), STATUS.INFO)
-                                
+
                                 local kitLookup = self:_createLookupRecord(Kit.tableName, kit.name)
-                                
+
                                 if kitCount == 1 then
                                     kitDTO:Kit1():SetTableName(kitLookup:GetTableName())
                                     kitDTO:Kit1():SetName(kitLookup:GetName())
@@ -2013,7 +2744,10 @@ function FSCIAdapter:_convertKits()
                                     kitDTO:Kit2():SetID(kitLookup:GetID())
                                     writeLog(string.format("Set Kit 2 [%s].", kit.name), STATUS.IMPL)
                                 else
-                                    writeLog(string.format("!!!! Too many kits (%d). Only 2 supported.", kitCount), STATUS.WARN)
+                                    writeLog(
+                                        string.format("!!!! Too many kits (%d). Only 2 supported.", kitCount),
+                                        STATUS.WARN
+                                    )
                                 end
                             end
                         end
@@ -2022,11 +2756,15 @@ function FSCIAdapter:_convertKits()
             end
         end
     end
-    
+
     if kitCount == 0 then
         writeLog("No kits found in import.", STATUS.INFO)
     end
-    
+
     writeLog("Kits complete.", STATUS.INFO, -1)
-    writeDebug("CONVERTKITS:: COMPLETE:: kit1=%s kit2=%s", kitDTO:Kit1():GetName() or "nil", kitDTO:Kit2():GetName() or "nil")
+    writeDebug(
+        "CONVERTKITS:: COMPLETE:: kit1=%s kit2=%s",
+        kitDTO:Kit1():GetName() or "nil",
+        kitDTO:Kit2():GetName() or "nil"
+    )
 end
