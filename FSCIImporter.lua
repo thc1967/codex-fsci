@@ -181,6 +181,7 @@ function FSCIImporter:_importCareer()
 
             if fsCareer.features then
                 local careerFill = careerItem:GetClassLevel()
+                writeDebug("CAREERFILL:: %s", json(careerFill))
                 if careerFill then
                     local choiceImporter = FSCIChoiceImporter:new(careerFill.features)
                     if choiceImporter then

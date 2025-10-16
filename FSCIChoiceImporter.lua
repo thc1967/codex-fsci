@@ -255,6 +255,10 @@ function FSCIChoiceImporter:_processTableLookupChoice(tableName, choiceType, ite
     local processed = false
 
     local function onMatch(matchedFeature)
+        if itemName == "Architecture" or itemName == "Blacksmithing" or itemName == "Ananjali" then
+            writeLog(string.format("onMatch [%s] [%s]", itemName, item:try_get("category")))
+            writeDebug("ONMATCH:: CATEGORIES:: [%s] [%s]", itemName, json(item:try_get("categories")))
+        end
         if self:_categoryMatch(item:try_get("category") or "", matchedFeature:try_get("categories") or {}) then
             writeLog(string.format("Adding %s [%s].", tableName, itemName), STATUS.IMPL)
             self:_addLevelChoice(matchedFeature.guid, itemId, matchedFeature)
