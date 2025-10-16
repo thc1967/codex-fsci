@@ -3,6 +3,8 @@
 --- @class FSCIChoiceImporter
 --- @field availableFeatures table The features available in the Codex
 --- @field levelChoices table The calculated list of selected features formatted for the character
+--- @field featureData table The full feature objects keyed by GUID
+--- @field filter table Optional filter for feature processing (e.g., { description = "War Domain" })
 FSCIChoiceImporter = RegisterGameType("FSCIChoiceImporter")
 FSCIChoiceImporter.__index = FSCIChoiceImporter
 
@@ -13,10 +15,10 @@ local writeLog = FSCIUtils.writeLog
 local STATUS = FSCIUtils.STATUS
 
 --- Creates a new level choice importer and processes the selected features.
---- @param selectedFeatures table The selected features to import
 --- @param availableFeatures table The list of available feature definitions
+--- @param filter? table Optional filter for feature processing (e.g., { description = "War Domain" })
 --- @return FSCIChoiceImporter|nil instance The new importer instance if valid
-function FSCIChoiceImporter:new(availableFeatures)
+function FSCIChoiceImporter:new(availableFeatures, filter)
 
     if availableFeatures then
         if type(availableFeatures) == "table" then
@@ -24,6 +26,8 @@ function FSCIChoiceImporter:new(availableFeatures)
                 local instance = setmetatable({}, self)
                 instance.availableFeatures = availableFeatures
                 instance.levelChoices = {}
+                instance.featureData = {}
+                instance.filter = filter or {}
                 return instance
             end
         end
@@ -37,10 +41,18 @@ end
 --- Processes a single selected feature to build our levelChoices structure
 --- @param feature table The selected feature to import
 --- @return table levelChoices The list of selected features, apped to available features
+--- @return table featureData The full feature objects keyed by GUID
 function FSCIChoiceImporter:ProcessFeature(feature)
+    writeDebug("FSCICHOICEIMPORTER:: PROCESSFEATURE:: %s", json(feature))
+
     local featureType = string.lower(feature.type)
-    if featureType == "choice" then
+
+    if featureType == "ability" or featureType == "choice" then
+        writeDebug("PROCESSFEATURES:: FEATURE::")
         self:_processFeatureChoice(feature)
+    elseif featureType == "deity" then
+        writeDebug("PROCESSFEATURES:: DEITY::")
+        self:_processDeityChoice(feature)
     elseif featureType == "language choice" then
         writeDebug("PROCESSFEATURES:: LANGUAGE::")
         self:_processLanguageChoice(feature)
@@ -50,18 +62,41 @@ function FSCIChoiceImporter:ProcessFeature(feature)
     elseif featureType == "skill choice" then
         writeDebug("PROCESSFEATURES:: SKILL::")
         self:_processSkillChoice(feature)
+    elseif featureType == "subclass" then
+        writeDebug("PROCESSFEATURE:: SUBCLASS::")
+        self:_processSubclassChoice(feature)
+    elseif featureType == "domain feature" then
+        writeDebug("PROCESSFEATURES:: DOMAINFEATURE:: %s", json(feature))
+        if feature.data and feature.data.selected then
+            writeDebug("PROCESSFEATURES:: RECURSE:: DOMAIN::")
+            -- self:Process(feature.data.selected)
+        end
     elseif featureType == "multiple features" then
         if feature.data and feature.data.features then
-            writeDebug("PROCESSFEATURES:: RECURSE::")
+            writeDebug("PROCESSFEATURES:: RECURSE:: MULTIPLE::")
             self:Process(feature.data.features)
         end
     end
-    return self.levelChoices
+
+    return self.levelChoices, self.featureData
+end
+
+--- Updates the featureData table with new data
+--- @param newFeatureData table The new feature data table to replace the current one
+function FSCIChoiceImporter:UpdateFeatureData(newFeatureData)
+    self.featureData = newFeatureData or {}
+end
+
+--- Sets the filter for feature processing
+--- @param filter? table The filter to apply (e.g., { description = "War Domain" }), or nil to clear
+function FSCIChoiceImporter:SetFilter(filter)
+    self.filter = filter or {}
 end
 
 --- Processes all selected features to build our levelChoices structure
 --- @param selectedFeatures table The selected features to import
 --- @return table levelChoices The list of selected features, mapped to available features
+--- @return table featureData The full feature objects keyed by GUID
 function FSCIChoiceImporter:Process(selectedFeatures)
     writeDebug("FSCICHOICEIMPORTER:: PROCESS:: START::")
 
@@ -70,15 +105,16 @@ function FSCIChoiceImporter:Process(selectedFeatures)
     end
 
     writeDebug("FSCICHOICEIMPORTER:: PROCESS:: COMPLETE:: %s", json(self.levelChoices))
-    return self.levelChoices
+    return self.levelChoices, self.featureData
 end
 
 --- Adds a selection to the level choices table, handling replacement or appending to arrays
 --- @param featureGuid string The GUID of the feature being selected
 --- @param selectedGuid string The GUID of the selected option
---- @param replaceCurrent boolean Optional. When true, replaces any existing value. When false (default), appends to a table
+--- @param featureObject? table Optional. The full feature object to store
+--- @param replaceCurrent? boolean Optional. When true, replaces any existing value. When false (default), appends to a table
 --- @private
-function FSCIChoiceImporter:_addLevelChoice(featureGuid, selectedGuid, replaceCurrent)
+function FSCIChoiceImporter:_addLevelChoice(featureGuid, selectedGuid, featureObject, replaceCurrent)
     replaceCurrent = replaceCurrent or false
 
     if replaceCurrent then
@@ -95,6 +131,11 @@ function FSCIChoiceImporter:_addLevelChoice(featureGuid, selectedGuid, replaceCu
             end
         end
     end
+
+    -- Store the full feature object if provided
+    if featureObject then
+        self.featureData[featureGuid] = featureObject
+    end
 end
 
 --- Processes a feature choice from the selected features, matching choices to available options
@@ -103,49 +144,47 @@ end
 function FSCIChoiceImporter:_processFeatureChoice(selectedFeature)
     writeDebug("PROCESSFEATURES:: FEATURE:: START:: %s", json(selectedFeature))
 
-    for _, choice in ipairs(selectedFeature.data.selected) do
+    for _, choice in ipairs(selectedFeature.data.selected or {}) do
         local choiceName = FSCIUtils.TranslateFeatureChoiceToCodex(choice.name, choice.description)
-        writeDebug(string.format("PROCESSRACEFEATURES:: FEATURE:: [%s]->[%s]", choice.name, choiceName))
+        writeDebug("PROCESSFEATURES:: FEATURE:: [%s]->[%s]", choice.name, choiceName)
         writeLog(string.format("Found Feature [%s] in import.", choiceName))
 
         local matchedFeature = self:_findMatchingFeature("CharacterFeatureChoice", self.availableFeatures)
         if matchedFeature then
             for _, option in pairs(matchedFeature.options) do
+                writeDebug("PROCESSFEATURES:: FEATURE:: ?MATCH:: [%s] [%s]", choiceName, option.name)
                 if sanitizedStringsMatch(choiceName, option.name) then
+                    writeDebug("PROCESSFEATURES:: FEATURE:: !!MATCH::")
                     writeLog(string.format("Adding Feature [%s].", choiceName), STATUS.IMPL)
-                    self:_addLevelChoice(matchedFeature.guid, option.guid)
+                    self:_addLevelChoice(matchedFeature.guid, option.guid, matchedFeature)
                     break
                 end
             end
-        else
-            writeLog("!!!! Matching Feature not found!", STATUS.WARN)
         end
     end
 
     writeDebug("PROCESSFEATURES:: FEATURE:: COMPLETE::")
 end
 
---- Processes a language choice from the selected features, looking up languages in the Codex
---- @param selectedFeature table The selected feature containing skill choice data
+--- Processes a deity choice from the selected features, looking up deity in the Codex
+--- @param selectedFeature table The selected feature containing deity choice data
+--- @private
+function FSCIChoiceImporter:_processDeityChoice(selectedFeature)
+    writeDebug("PROCESSFEATURES:: DEITY:: START:: %s", json(selectedFeature))
+
+    self:_processTableLookupChoice(Deity.tableName, "CharacterDeityChoice", selectedFeature.name)
+
+    writeDebug("PROCESSFEATURES:: DEITY:: COMPLETE::")
+end
+
+--- Processes a language choice from the selected features, looking up language in the Codex
+--- @param selectedFeature table The selected feature containing deity choice data
 --- @private
 function FSCIChoiceImporter:_processLanguageChoice(selectedFeature)
     writeDebug("PROCESSFEATURES:: LANGUAGE:: START:: %s", json(selectedFeature))
 
     for _, languageName in pairs(selectedFeature.data.selected) do
-        writeLog(string.format("Found Language [%s] in import.", languageName))
-        local languageId = tableLookupFromName(Language.tableName, languageName)
-        if languageId then
-            writeLog("Found match in Codex.")
-            local matchedFeature = self:_findMatchingFeature("CharacterLanguageChoice", self.availableFeatures)
-            if matchedFeature then
-                writeLog(string.format("Adding Language [%s].", languageName), STATUS.IMPL)
-                self:_addLevelChoice(matchedFeature.guid, languageId)
-            else
-                writeLog("!!!! Matching feature not found!", STATUS.WARN)
-            end
-        else
-            writeLog(string.format("!!!! Language [%s] not found in Codex.", languageName), STATUS.WARN)
-        end
+        self:_processTableLookupChoice(Language.tableName, "CharacterLanguageChoice", languageName)
     end
 
     writeDebug("PROCESSFEATURES:: LANGUAGE:: COMPLETE::")
@@ -158,20 +197,7 @@ function FSCIChoiceImporter:_processPerkChoice(selectedFeature)
     writeDebug("PROCESSFEATURES:: PERK:: START:: %s", json(selectedFeature))
 
     for _, perk in pairs(selectedFeature.data.selected) do
-        writeLog(string.format("Found Perk [%s] in import.", perk.name))
-        local perkId = tableLookupFromName(CharacterFeat.tableName, perk.name)
-        if perkId then
-            writeLog("Found match in Codex.")
-            local matchedFeature = self:_findMatchingFeature("CharacterFeatChoice", self.availableFeatures)
-            if matchedFeature then
-                writeLog(string.format("Adding Perk [%s].", perk.name), STATUS.IMPL)
-                self:_addLevelChoice(matchedFeature.guid, perkId)
-            else
-                writeLog("!!!! Matching feature not found!", STATUS.WARN)
-            end
-        else
-            writeLog(string.format("!!!! Perk [%s] not found in Codex!", perk.name), STATUS.WARN)
-        end
+        self:_processTableLookupChoice(CharacterFeat.tableName, "CharacterFeatChoice", perk.name)
     end
 
     writeDebug("PROCESSFEATURES:: PERK:: COMPLETE::")
@@ -184,23 +210,74 @@ function FSCIChoiceImporter:_processSkillChoice(selectedFeature)
     writeDebug("PROCESSFEATURES:: SKILL:: START:: %s", json(selectedFeature))
 
     for _, skillName in pairs(selectedFeature.data.selected) do
-        writeLog(string.format("Found Skill [%s] in import.", skillName))
-        local skillId = tableLookupFromName(Skill.tableName, skillName)
-        if skillId then
-            writeLog("Found match in Codex.")
-            local matchedFeature = self:_findMatchingFeature("CharacterSkillChoice", self.availableFeatures)
-            if matchedFeature then
-                writeLog(string.format("Adding Skill [%s].", skillName), STATUS.IMPL)
-                self:_addLevelChoice(matchedFeature.guid, skillId)
-            else
-                writeLog("!!!! Matching feature not found!", STATUS.WARN)
-            end
-        else
-            writeLog(string.format("!!!! Skill [%s] not found in Codex.", skillName), STATUS.WARN)
-        end
+        self:_processTableLookupChoice(Skill.tableName, "CharacterSkillChoice", skillName)
     end
 
     writeDebug("PROCESSFEATURES:: SKILL:: COMPLETE::")
+end
+
+--- Processes a subclass choice from the selected features, looking up subclass in the Codex
+--- @param selectedFeature table The selected feature containing subclass choice data
+--- @private
+function FSCIChoiceImporter:_processSubclassChoice(selectedFeature)
+    writeDebug("PROCESSFEATURES:: SUBCLASS:: START:: %s", json(selectedFeature))
+
+    self:_processTableLookupChoice("subclasses", "CharacterSubclassChoice", selectedFeature.name)
+
+    writeDebug("PROCESSFEATURES:: SUBCLASS:: COMPLETE::")
+end
+
+--- Processes a domain feature from the selected features
+--- @param selectedFeature table The selected feature containing choice data
+--- @private
+function FSCIChoiceImporter:_processDomainFeature(selectedFeature)
+    writeDebug("PROCESSFEATURES:: DOMAINFEATURE:: START:: %s", json(selectedFeature))
+
+    writeDebug("PROCESSFEATURES:: DOMAINFEATURE:: END::")
+end
+
+--- Processes a table lookup choice by finding the item in a table, matching to a feature, and adding to level choices
+--- @param tableName string The table name to look up the item in (e.g., "Language.tableName", "CharacterFeat.tableName")
+--- @param choiceType string The choice type to find in available features (e.g., "CharacterLanguageChoice")
+--- @param itemName string The name of the item to look up
+--- @return boolean success Whether the lookup and addition was successful
+--- @private
+function FSCIChoiceImporter:_processTableLookupChoice(tableName, choiceType, itemName)
+    writeLog(string.format("Found %s [%s] in import.", tableName, itemName))
+    local itemId = tableLookupFromName(tableName, itemName)
+    if itemId then
+        writeLog("Found match in Codex.")
+        local matchedFeature = self:_findMatchingFeature(choiceType, self.availableFeatures)
+        if matchedFeature then
+            writeLog(string.format("Adding %s [%s].", tableName, itemName), STATUS.IMPL)
+            self:_addLevelChoice(matchedFeature.guid, itemId, matchedFeature)
+            return true
+        end
+    else
+        writeLog(string.format("!!!! %s [%s] not found in Codex.", tableName, itemName), STATUS.WARN)
+    end
+    return false
+end
+
+--- Checks if an available feature passes the current filter criteria
+--- @param availableFeature table The available feature to check against the filter
+--- @return boolean match True if the feature matches the filter (or no filter is set), false otherwise
+--- @private
+function FSCIChoiceImporter:_filterMatch(availableFeature)
+    -- If filter is set and has content, check all criteria
+    if self.filter and next(self.filter) then
+        for key, value in pairs(self.filter) do
+            if availableFeature[key] and type(availableFeature[key]) == "string" then
+                if not sanitizedStringsMatch(string.sub(availableFeature[key], 1, #value), value) then
+                    return false
+                end
+            else
+                return false
+            end
+        end
+    end
+
+    return true  -- No filter OR all criteria passed
 end
 
 --- Recursively searches available features to find a feature matching the specified choice type
@@ -214,7 +291,7 @@ function FSCIChoiceImporter:_findMatchingFeature(choiceType, availableFeatures)
     local matchedFeature = nil
 
     for _, availableFeature in pairs(availableFeatures) do
-        if sanitizedStringsMatch(choiceType, availableFeature.typeName) then
+        if sanitizedStringsMatch(choiceType, availableFeature.typeName) and self:_filterMatch(availableFeature) then
             matchedFeature = availableFeature
         else
             local nestedFeatures = availableFeature:try_get("features")

@@ -2,7 +2,7 @@ FSCIUtils = RegisterGameType("FSCIUtils")
 FSCIUtils.__index = FSCIUtils
 
 local FSCI_DEBUG = true
-local FSCI_VERBOSE = true
+local FSCI_VERBOSE = false
 
 --- Status flags for `FSCIUtils.writeLog()`
 --- These control both logging behavior and text coloring
@@ -64,6 +64,13 @@ end
 --- Sets the verbose mode state.
 --- @param v boolean The verbose mode state to set
 function FSCIUtils.SetVerboseMode(v)
+    FSCI_VERBOSE = v
+end
+
+-- Sets the debug & verbose state
+--- @param v boolean The verbose mode state to set
+function FSCIUtils.SetDebugVerboseMode(v)
+    FSCI_DEBUG = v
     FSCI_VERBOSE = v
 end
 
@@ -225,4 +232,95 @@ end
 --- @return string The translated string or original if no translation exists
 function FSCIUtils.TranslateFStoCodex(fsString)
     return FSCI_TRANSLATIONS[fsString] or fsString
+end
+
+--- FSCIFillFlattener handles flattening hierarchical feature structures from both
+--- FSCILeveledChoiceImporter (leveled features) and FSCIChoiceImporter (direct features)
+FSCIFillFlattener = RegisterGameType("FSCIFillFlattener")
+FSCIFillFlattener.__index = FSCIFillFlattener
+
+--- Static configuration for target types and properties to keep
+FSCIFillFlattener._targetTypes = {
+    ["CharacterSkillChoice"] = true,
+    ["CharacterFeatChoice"] = true,
+    ["CharacterLanguageChoice"] = true,
+    ["CharacterFeatureChoice"] = true,
+    ["CharacterDeityChoice"] = true,
+    ["CharacterSubclassChoice"] = true
+}
+
+FSCIFillFlattener._propertiesToKeep = {
+    "guid",
+    -- "typeName",
+    "name",
+    "categories",
+    "options"
+}
+
+--- Helper function to extract only the properties we want from a feature
+--- @param feature table The feature to extract properties from
+--- @return table extracted The extracted properties
+--- @private
+function FSCIFillFlattener._extractProperties(feature)
+    FSCIUtils.writeDebug("CLASSFILL:: EXTRACT:: %s", json(feature))
+    local extracted = {
+        __typeName = feature.typeName
+    }
+    for _, prop in ipairs(FSCIFillFlattener._propertiesToKeep) do
+        if feature:try_get(prop) then
+            extracted[prop] = feature[prop]
+        end
+    end
+    return extracted
+end
+
+--- Recursive function to process features at any level
+--- @param features table Array of features to process
+--- @param result table Array to store results in
+--- @private
+function FSCIFillFlattener._processFeatures(features, result)
+    if not features then return end
+
+    for _, feature in pairs(features) do
+        -- Check if this feature is a target type we want to keep
+        if feature.typeName and FSCIFillFlattener._targetTypes[feature.typeName] then
+            table.insert(result, FSCIFillFlattener._extractProperties(feature))
+        end
+
+        -- Recursively process nested features
+        FSCIUtils.writeDebug("CLASSFILL:: FEATURE:: %s", json(feature))
+        if feature:try_get("features") then
+            FSCIFillFlattener._processFeatures(feature.features, result)
+        end
+    end
+end
+
+--- Flattens leveled features structure (for FSCILeveledChoiceImporter data)
+--- @param leveledFeatures table Array of level objects, each containing features
+--- @return table Flat array of filtered feature objects
+function FSCIFillFlattener.FlattenLeveledFeatures(leveledFeatures)
+    local result = {}
+
+    if leveledFeatures then
+        for _, level in pairs(leveledFeatures) do
+            if level.features and next(level.features) then
+                FSCIFillFlattener._processFeatures(level.features, result)
+            end
+        end
+    end
+
+    return result
+end
+
+--- Flattens direct features structure (for FSCIChoiceImporter data)
+--- @param features table Array of feature objects
+--- @return table Flat array of filtered feature objects
+function FSCIFillFlattener.FlattenFeatures(features)
+    local result = {}
+
+    if features then
+        FSCIFillFlattener._processFeatures(features, result)
+    end
+
+    return result
 end

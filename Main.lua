@@ -799,9 +799,9 @@ function ThcForgeSteelCharacterImporter:_addDomain(domainInfo, classLevelsFill)
 
     local searchKey = ""    
     if self.domainCount == 1 then
-        searchKey = "First Divine Domain"
+        searchKey = "1st Domain"
     elseif self.domainCount == 2 then
-        searchKey = "Second Divine Domain"
+        searchKey = "2nd Domain"
     else
         writeLog("Too many domains!", FSCI_STATUS.WARN)
         return
