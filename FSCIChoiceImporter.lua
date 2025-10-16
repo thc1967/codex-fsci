@@ -65,11 +65,14 @@ function FSCIChoiceImporter:ProcessFeature(feature)
     elseif featureType == "subclass" then
         writeDebug("PROCESSFEATURE:: SUBCLASS::")
         self:_processSubclassChoice(feature)
+    elseif featureType == "ancestry choice" then
+        writeDebug("PROCESSFEATURE:: ANCESTRY::")
+        self:_processAncestryChoice(feature)
     elseif featureType == "domain feature" then
         writeDebug("PROCESSFEATURES:: DOMAINFEATURE:: %s", json(feature))
         if feature.data and feature.data.selected then
             writeDebug("PROCESSFEATURES:: RECURSE:: DOMAIN::")
-            -- self:Process(feature.data.selected)
+            self:Process(feature.data.selected)
         end
     elseif featureType == "multiple features" then
         if feature.data and feature.data.features then
@@ -209,6 +212,14 @@ function FSCIChoiceImporter:_processPerkChoice(selectedFeature)
     writeDebug("PROCESSFEATURES:: PERK:: COMPLETE::")
 end
 
+function FSCIChoiceImporter:_processAncestryChoice(selectedFeature)
+    writeDebug("PROCESSFEATURES:: ANCESTRY:: START:: %s", json(selectedFeature))
+
+    self:_processTableLookupChoice(Race.tableName, "CharacterAncestryInheritanceChoice", selectedFeature.data.selected.name)
+
+    writeDebug("PROCESSFEATURES:: ANCESTRY:: COMPLETE::")
+end
+
 --- Processes a skill choice from the selected features, looking up skills in the Codex
 --- @param selectedFeature table The selected feature containing skill choice data
 --- @private
@@ -255,11 +266,12 @@ function FSCIChoiceImporter:_processTableLookupChoice(tableName, choiceType, ite
     local processed = false
 
     local function onMatch(matchedFeature)
-        if itemName == "Architecture" or itemName == "Blacksmithing" or itemName == "Ananjali" then
-            writeLog(string.format("onMatch [%s] [%s]", itemName, item:try_get("category")))
-            writeDebug("ONMATCH:: CATEGORIES:: [%s] [%s]", itemName, json(item:try_get("categories")))
+        local categoryMatch = self:_itemInFlagList(item:try_get("category") or "", matchedFeature:try_get("categories") or {})
+        local individualMatch = self:_itemInFlagList(itemId, matchedFeature:try_get("individualSkills") or {})
+        if itemName == "Gymnastics" or itemName == "Escape Artist" then
+            writeDebug("ONMATCH:: %s cat %s ind %s f %s", itemName, categoryMatch, individualMatch, json(matchedFeature))
         end
-        if self:_categoryMatch(item:try_get("category") or "", matchedFeature:try_get("categories") or {}) then
+        if categoryMatch or individualMatch then
             writeLog(string.format("Adding %s [%s].", tableName, itemName), STATUS.IMPL)
             self:_addLevelChoice(matchedFeature.guid, itemId, matchedFeature)
             return true
@@ -335,16 +347,14 @@ function FSCIChoiceImporter:_findMatchingFeature(choiceType, availableFeatures, 
     return processed
 end
 
---- Determines whether any of the values by string in selected are in the flag list available
---- @param selected string The category name to match
---- @param available table Flag list of available categories
+--- Determines whether the selected item is within the flag list of available items
+--- @param selected string Item to search for in the flag list
+--- @param available table Flag list of available items
 --- @return boolean foundMatch True if the available list is empty or we found a match
-function FSCIChoiceImporter:_categoryMatch(selected, available)
+function FSCIChoiceImporter:_itemInFlagList(selected, available)
     local foundMatch = true
-
     if next(available) then
         foundMatch = available[selected]
     end
-
     return foundMatch
 end

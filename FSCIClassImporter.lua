@@ -47,16 +47,19 @@ function FSCIClassImporter:Import()
 
             local classFill = {}
             classInfo:FillLevelsUpTo(classLevel, false, "nonprimary", classFill)
-            local flatFill = FSCIFillFlattener.FlattenLeveledFeatures(classFill)
             writeDebug("FSCICLASSIMPORTER:: CLASSFILL:: %s", json(classFill))
-            writeDebug("FSCICLASSIMPORTER:: CLASSFILL:: FLATFILL:: %s", json(flatFill))
 
             local classFillImporter = FSCILeveledChoiceImporter:new(classFill)
             if classFillImporter then
                 local domainChoiceKey, domainUsesSubclass = self:_processDeity(classFillImporter)
                 writeDebug("FSCICLASSIMPORTER:: DOMAINKEY:: [%s] USESUBCLASS:: [%s]", domainChoiceKey, domainUsesSubclass)
 
-                self:_processSubclass(classFillImporter, classLevel)
+                if domainUsesSubclass then
+                    self:_processDomainAsSubclass(classFillImporter, classLevel)
+                else
+                    self:_processSubclass(classFillImporter, classLevel)
+                end
+                
                 self:_processClassFeatures(classFillImporter)
             end
         else
@@ -98,6 +101,74 @@ function FSCIClassImporter:_processDeity(classFillImporter)
     end
 
     return domainChoiceKey, useSubclass
+end
+
+--- Process domains as subclasses
+--- @param classFillImporter FSCILeveledChoiceImporter The class fill importer
+--- @param classLevel number The character's level
+--- @private
+function FSCIClassImporter:_processDomainAsSubclass(classFillImporter, classLevel)
+
+    writeDebug("DOMAINASSUB:: START::")
+
+    local domainCount = 0
+
+    if self.fsClass.featuresByLevel then
+        for _, levelFeature in ipairs(self.fsClass.featuresByLevel) do
+            if levelFeature.features then
+                for _, feature in pairs(levelFeature.features) do
+                    if string.lower(feature.name) == "domain" then
+                        for _, domainInfo in pairs(feature.data.selected) do
+                            writeDebug("DOMAINASSUB:: DOMAIN:: %s", domainInfo.name)
+                            writeLog(string.format("Domain [%s] found.", domainInfo.name))
+                            local domainId, domainItem = tableLookupFromName("subclasses", domainInfo.name .. " Domain")
+                            if domainId == nil then
+                                writeLog(string.format("!!!! Domain [%s] not found in Codex.", domainInfo.name), STATUS.WARN)
+                                break
+                            end
+                            
+                            domainCount = domainCount + 1
+                            if domainCount > 2 then
+                                writeLog("Too many domains!", STATUS.WARN)
+                                return
+                            end
+                            local searchKey = string.format("%s Domain", domainCount == 2 and "2nd" or "1st")
+                            writeDebug("DOMAINASSUB:: SEARCH:: %s", searchKey)
+
+                            domainInfo.name = domainInfo.name .. " Domain"
+
+                            local foundLevelChoice = false
+                            for _, levelDetails in ipairs(classFillImporter.availableFeatures) do
+                                for _, featureInfo in ipairs(levelDetails.features) do
+                                    if featureInfo.typeName == "CharacterSubclassChoice" and featureInfo.name == searchKey then
+                                        writeDebug("DOMAINASSUB:: FOUND:: %s", featureInfo.guid)
+                                        local lc = self.character:GetLevelChoices()
+                                        if lc[featureInfo.guid] == nil then lc[featureInfo.guid] = {} end
+                                        table.insert(lc[featureInfo.guid], domainItem.id)
+
+                                        local subclassFill = {}
+                                        domainItem:FillLevelsUpTo(classLevel, false, "nonprimary", subclassFill)
+                                        writeDebug("ADDDOMAIN:: SUBCLASSFILL:: %s", json(subclassFill))
+
+                                        local domainImporter = FSCILeveledChoiceImporter:new(subclassFill)
+                                        if domainImporter then
+                                            local levelChoices = domainImporter:ProcessLeveled(domainInfo.featuresByLevel)
+                                            FSCIUtils.MergeTables(self.character:GetLevelChoices(), levelChoices)
+                                        end
+
+                                        foundLevelChoice = true
+                                        break
+                                    end
+                                end
+                                if foundLevelChoice then break end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
 end
 
 --- Process domain data from the class features

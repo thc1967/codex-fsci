@@ -16,37 +16,48 @@ FSCIUtils.STATUS = {
 
 --- Translate strings from Forge Steel names to Codex names.
 local FSCI_TRANSLATIONS = {
+    -- Abilities
+    ["Demon Unleashed"] = "A Demon Unleashed",
+    ["Force Orb"] = "Force Orbs",
+    ["Halt, Miscreant!"] = "Halt Miscreant!",
+
     -- Ancestries
     ["Elf (high)"] = "Elf, High",
     ["Elf (wode)"] = "Elf, Wode",
+
     -- Ancestry Features
     ["Draconic Pride"] = "Draconian Pride",
     ["Perseverence"] = "Perseverance",
     ["Resist the Unnatural"] = "Resist the Supernatural",
+
     -- Choice Types
     ["Elementalist Ward"] = "Ward",
+
     -- Classes & Subclasses
     ["Chronokinetic"] = "Disciple of the Chronokinetic",
     ["Cryokinetic"] = "Disciple of the Cryokinetic",
     ["Metakinetic"] = "Disciple of the Metakinetic",
-    -- Abilities
-    ["Demon Unleashed"] = "A Demon Unleashed",
-    ["Motivate Earth"] = "Manipulate Earth", -- Remove when Codex Data is fixed
-    ["Halt, Miscreant!"] = "Halt Miscreant!",
+
     -- Feats
     ["I've Got You"] = "I've Got You!",
-    ["Teamwork"] = "Team Backbone", -- Remove when Codex Data is fixed
+    ["Put Your Back Into It"] = "Put Your Back Into It!",
     ["Prayer"] = "Prayers",
+
     -- Inciting Incidents
     ["Near-Death Experience"] = "Near Death Experience",
+
     -- Kits
     ["Rapid Fire"] = "Rapid-Fire",
+
     -- Languages
+    ["Kalliac"] = "Kalliak",
     ["Yllric"] = "Yllyric",
+
     -- Psionic Augmentations & Wards
     ["Battle Augmentation"] = "Battle Augmentation ",
     ["Steel Ward"] = "Steel Ward ",
     ["Talent Ward"] = "Ward",
+
     -- Skills
     ["Perform"] = "Performance"
 }
