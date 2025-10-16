@@ -43,7 +43,7 @@ function FSCIClassImporter:Import()
                 level = classLevel
             }
 
-            self:_processKits()
+            self:_processKits(self.fsClass.featuresByLevel)
 
             local classFill = {}
             classInfo:FillLevelsUpTo(classLevel, false, "nonprimary", classFill)
@@ -134,24 +134,24 @@ function FSCIClassImporter:_processDomains(domainChoiceKey, classFillImporter)
 end
 
 --- Processes kit data from the class features.
+--- @param featuresByLevel table The list of features that might hold kit information
 --- @private
-function FSCIClassImporter:_processKits()
-    if self.fsClass.featuresByLevel then
-        local kits = self:_extractKits(self.fsClass.featuresByLevel)
-        local kitCount = 0
-        for _, kit in ipairs(kits) do
-            writeLog(string.format("Kit [%s] found in import.", kit.name))
-            local kitId = tableLookupFromName(Kit.tableName, kit.name)
-            if kitId then
-                kitCount = kitCount + 1
-                local propName = "kitid"
-                if kitCount > 1 then propName = propName .. kitCount end
-                writeLog(string.format("Adding Kit %d [%s].", kitCount, kit.name), STATUS.IMPL)
-                local k = self.character:get_or_add(propName, kitId)
-                k = kitId
-            else
-                writeLog(string.format("!!!! Kit [%s] not found in Codex!", kit.name), STATUS.WARN)
-            end
+function FSCIClassImporter:_processKits(featuresByLevel)
+    local kits = self:_extractKits(featuresByLevel)
+    writeDebug("PROCESSKITS:: %s", json(kits))
+    local kitCount = 0
+    for _, kit in ipairs(kits) do
+        writeLog(string.format("Kit [%s] found in import.", kit.name))
+        local kitId = tableLookupFromName(Kit.tableName, kit.name)
+        if kitId then
+            kitCount = kitCount + 1
+            local propName = "kitid"
+            if kitCount > 1 then propName = propName .. kitCount end
+            writeLog(string.format("Adding Kit %d [%s].", kitCount, kit.name), STATUS.IMPL)
+            local k = self.character:get_or_add(propName, kitId)
+            k = kitId
+        else
+            writeLog(string.format("!!!! Kit [%s] not found in Codex!", kit.name), STATUS.WARN)
         end
     end
 end
@@ -183,6 +183,7 @@ end
 --- @private
 function FSCIClassImporter:_processSubclass(classFillImporter, classLevel)
     local subclassName, subclassFeaturesByLevel = self:_findSubclassName(self.fsClass.subclasses or {})
+
     writeDebug("FSCICLASSIMPORTER:: SUBCLASS:: %s", subclassName)
     if subclassName and #subclassName then
         local findSubclass = { type = "Subclass", name = subclassName}
@@ -198,6 +199,10 @@ function FSCIClassImporter:_processSubclass(classFillImporter, classLevel)
             if subclassFillImporter then
                 leveledChoices = subclassFillImporter:ProcessLeveled(subclassFeaturesByLevel)
                 FSCIUtils.MergeTables(self.character:GetLevelChoices(), leveledChoices)
+            end
+
+            if subclassFeaturesByLevel then
+                self:_processKits(subclassFeaturesByLevel)
             end
         end
     end
@@ -216,19 +221,18 @@ function FSCIClassImporter:_findSubclassName(subclasses)
     end
 end
 
---- Extracts feature names of a specific type from the selected character features.
+--- Extracts kit names from the selected character features into a simple list of names.
 --- @param featuresByLevel table Array of level objects containing features
---- @param featureType string The type of feature to extract (e.g., "kit", "domain")
---- @return table features Array of feature names
+--- @return table kits Array of kit names
 --- @private
-function FSCIClassImporter:_extractFeaturesByType(featuresByLevel, featureType)
+function FSCIClassImporter:_extractKits(featuresByLevel)
     local features = {}
-    local lowerFeatureType = string.lower(featureType)
+    local featureType = "kit"
 
     for _, levelData in pairs(featuresByLevel) do
         if levelData.features then
             for _, feature in pairs(levelData.features) do
-                if string.lower(feature.type) == lowerFeatureType then
+                if string.lower(feature.type) == featureType then
                     if feature.data and feature.data.selected then
                         for _, selectedFeature in pairs(feature.data.selected) do
                             table.insert(features, selectedFeature)
@@ -240,14 +244,6 @@ function FSCIClassImporter:_extractFeaturesByType(featuresByLevel, featureType)
     end
 
     return features
-end
-
---- Extracts kit names from the selected character features into a simple list of names.
---- @param featuresByLevel table Array of level objects containing features
---- @return table kits Array of kit names
---- @private
-function FSCIClassImporter:_extractKits(featuresByLevel)
-    return self:_extractFeaturesByType(featuresByLevel, "kit")
 end
 
 --- Extracts selected domains plus features by level for each
@@ -286,7 +282,6 @@ end
 --- @return table leveledFeatures Array of leveled features for the domain
 --- @private
 function FSCIClassImporter:_extractDomainFeatures(domainName, featuresByLevel)
-    -- return self:_extractFeaturesByType(featuresByLevel, "domain feature")
     local leveledFeatures = {}
     local domainKey = "domain-" .. domainName:lower()
 

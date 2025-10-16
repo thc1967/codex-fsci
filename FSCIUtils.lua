@@ -30,6 +30,7 @@ local FSCI_TRANSLATIONS = {
     ["Cryokinetic"] = "Disciple of the Cryokinetic",
     ["Metakinetic"] = "Disciple of the Metakinetic",
     -- Abilities
+    ["Demon Unleashed"] = "A Demon Unleashed",
     ["Motivate Earth"] = "Manipulate Earth", -- Remove when Codex Data is fixed
     ["Halt, Miscreant!"] = "Halt Miscreant!",
     -- Feats
