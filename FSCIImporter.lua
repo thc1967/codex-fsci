@@ -142,11 +142,13 @@ function FSCIImporter:_importAncestry()
 
             if self.fsData.ancestry.features then
                 local codexFill = codexRaceItem:GetClassLevel()
+                print("FSCI:: RACEFILL::", codexFill)
                 writeDebug("RACEFILL:: %s", json(codexFill))
                 if codexFill then
                     local choiceImporter = FSCIChoiceImporter:new(codexFill.features)
                     if choiceImporter then
                         local levelChoices = choiceImporter:Process(self.fsData.ancestry.features)
+                        writeDebug("RACEFILL:: RESULTS:: %s", json(levelChoices))
                         FSCIUtils.MergeTables(self.character:GetLevelChoices(), levelChoices)
                     end
                 end

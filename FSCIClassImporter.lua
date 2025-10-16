@@ -108,25 +108,25 @@ function FSCIClassImporter:_processDomains(domainChoiceKey, classFillImporter)
 
     if self.fsClass.featuresByLevel then
         local domains = self:_extractDomains(self.fsClass.featuresByLevel)
-        writeDebug("FSCICLASSIMPORTER:: DOMAINS:: %s", json(domains))
+        writeDebug("FSCICLASSIMPORTER:: DOMAINS:: EXTRACTED:: %s", json(domains))
 
-        for _, domain in ipairs(domains) do
-            writeLog(string.format("Domain [%s] found in import.", domain.name))
-            local domainId = tableLookupFromName(DeityDomain.tableName, domain.name)
+        for domainName, domain in pairs(domains) do
+            writeLog(string.format("Found Domain [%s] in import.", domainName))
+            local domainId = tableLookupFromName(DeityDomain.tableName, domainName)
             if domainId then
-                writeLog(string.format("Adding Domain [%s].", domain.name), STATUS.IMPL)
+                writeLog(string.format("Adding Domain [%s].", domainName), STATUS.IMPL)
                 writeDebug("FSCICLASSIMPORTER:: DOMAINS:: ADDING::")
                 FSCIUtils.AppendToTable(self.character:GetLevelChoices(), domainChoiceKey .. "-domains", domainId)
 
-                -- if domain.featuresByLevel then
-                --     writeDebug("FSCICLASSIMPORTER:: DOMAINS:: FEATURESBYLEVEL:: INPUT:: %s", json(domain.featuresByLevel))
-                --     local filter = { description = domain.name .. " Domain" }
-                --     classFillImporter:SetFilter(filter)
-                --     local leveledChoices = classFillImporter:ProcessLeveled(domain.featuresByLevel)
-                --     writeDebug("FSCICLASSIMPORTER:: DOMAINS:: FEATURESBYLEVEL:: RESULT:: %s", json(leveledChoices))
-                --     FSCIUtils.MergeTables(self.character:GetLevelChoices(), leveledChoices)
-                --     classFillImporter:SetFilter(nil)
-                -- end
+                if domain.featuresByLevel then
+                    writeDebug("FSCICLASSIMPORTER:: DOMAINS:: FEATURESBYLEVEL:: INPUT:: %s", json(domain.featuresByLevel))
+                    local filter = { name = domainName .. " Domain" }
+                    classFillImporter:SetFilter(filter)
+                    local leveledChoices = classFillImporter:ProcessLeveled(domain.featuresByLevel)
+                    writeDebug("FSCICLASSIMPORTER:: DOMAINS:: FEATURESBYLEVEL:: RESULT:: %s", json(leveledChoices))
+                    FSCIUtils.MergeTables(self.character:GetLevelChoices(), leveledChoices)
+                    classFillImporter:SetFilter(nil)
+                end
             end
         end
     end
@@ -250,12 +250,68 @@ function FSCIClassImporter:_extractKits(featuresByLevel)
     return self:_extractFeaturesByType(featuresByLevel, "kit")
 end
 
---- Extracts domain names from the selected character features into a simple list of names.
---- @param featuresByLevel table Array of level objects containing features
---- @return table domains Array of domain names
+--- Extracts selected domains plus features by level for each
+--- @param featuresByLEvel table Array of level objects containing features
+--- @return table domains Array of domains with leveled features
 --- @private
 function FSCIClassImporter:_extractDomains(featuresByLevel)
-    return self:_extractFeaturesByType(featuresByLevel, "domain")
+    local domains = {}
+
+    for _, levelData in pairs(featuresByLevel) do
+        if levelData.features and #levelData.features > 0 then
+           for _, feature in pairs(levelData.features) do
+                if string.lower(feature.type) == "domain" then
+                    if feature.data and feature.data.selected and #feature.data.selected > 0 then
+                        for _, domainSelection in pairs(feature.data.selected) do
+                            local domainName = domainSelection.name
+                            local domainFeatures = self:_extractDomainFeatures(domainName, featuresByLevel)
+                            if #domainFeatures > 0 then
+                                domains[domainName] = {
+                                    featuresByLevel = domainFeatures
+                                }
+                            end
+                        end
+                    end
+                end
+           end 
+        end
+    end
+
+    return domains
+end
+
+--- Extracts domain names from the selected character features into list of leveled features.
+--- @param domainName string Name of the domain for which to extract leveled features
+--- @param featuresByLevel table Array of level objects containing features
+--- @return table leveledFeatures Array of leveled features for the domain
+--- @private
+function FSCIClassImporter:_extractDomainFeatures(domainName, featuresByLevel)
+    -- return self:_extractFeaturesByType(featuresByLevel, "domain feature")
+    local leveledFeatures = {}
+    local domainKey = "domain-" .. domainName:lower()
+
+    for _, levelData in pairs(featuresByLevel) do
+        if levelData.features and #levelData.features > 0 then
+            local leveledFeature = {
+                level = levelData.level,
+                features = {}
+            }
+            for _, feature in pairs(levelData.features) do
+                if string.lower(feature.type) == "domain feature" then
+                    for _, selectedFeature in pairs(feature.data.selected) do
+                        if selectedFeature.id and selectedFeature.id:lower():sub(1, #domainKey) == domainKey then
+                            table.insert(leveledFeature.features, selectedFeature)
+                        end
+                    end
+                end
+            end
+            if #leveledFeature.features > 0 then
+                table.insert(leveledFeatures, leveledFeature)
+            end
+        end
+    end
+
+    return leveledFeatures
 end
 
 --- Translates Class Ability selections from featuresByLevel data.

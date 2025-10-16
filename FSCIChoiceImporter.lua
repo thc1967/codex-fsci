@@ -144,23 +144,29 @@ end
 function FSCIChoiceImporter:_processFeatureChoice(selectedFeature)
     writeDebug("PROCESSFEATURES:: FEATURE:: START:: %s", json(selectedFeature))
 
+    local choiceName
+
+    local function onMatch(matchedFeature)
+        local processed = false
+        for _, option in pairs(matchedFeature.options) do
+            writeDebug("PROCESSFEATURES:: FEATURE:: ?MATCH:: [%s] [%s]", choiceName, option.name)
+            if sanitizedStringsMatch(choiceName, option.name) then
+                writeDebug("PROCESSFEATURES:: FEATURE:: !!MATCH::")
+                writeLog(string.format("Adding Feature [%s].", choiceName), STATUS.IMPL)
+                self:_addLevelChoice(matchedFeature.guid, option.guid, matchedFeature)
+                processed = true
+                break
+            end
+        end
+        return processed
+    end
+
     for _, choice in ipairs(selectedFeature.data.selected or {}) do
-        local choiceName = FSCIUtils.TranslateFeatureChoiceToCodex(choice.name, choice.description)
+        choiceName = FSCIUtils.TranslateFeatureChoiceToCodex(choice.name, choice.description)
         writeDebug("PROCESSFEATURES:: FEATURE:: [%s]->[%s]", choice.name, choiceName)
         writeLog(string.format("Found Feature [%s] in import.", choiceName))
 
-        local matchedFeature = self:_findMatchingFeature("CharacterFeatureChoice", self.availableFeatures)
-        if matchedFeature then
-            for _, option in pairs(matchedFeature.options) do
-                writeDebug("PROCESSFEATURES:: FEATURE:: ?MATCH:: [%s] [%s]", choiceName, option.name)
-                if sanitizedStringsMatch(choiceName, option.name) then
-                    writeDebug("PROCESSFEATURES:: FEATURE:: !!MATCH::")
-                    writeLog(string.format("Adding Feature [%s].", choiceName), STATUS.IMPL)
-                    self:_addLevelChoice(matchedFeature.guid, option.guid, matchedFeature)
-                    break
-                end
-            end
-        end
+        self:_findMatchingFeature("CharacterFeatureChoice", self.availableFeatures, onMatch)
     end
 
     writeDebug("PROCESSFEATURES:: FEATURE:: COMPLETE::")
@@ -244,19 +250,27 @@ end
 --- @private
 function FSCIChoiceImporter:_processTableLookupChoice(tableName, choiceType, itemName)
     writeLog(string.format("Found %s [%s] in import.", tableName, itemName))
-    local itemId = tableLookupFromName(tableName, itemName)
-    if itemId then
-        writeLog("Found match in Codex.")
-        local matchedFeature = self:_findMatchingFeature(choiceType, self.availableFeatures)
-        if matchedFeature then
+
+    local itemId, item = tableLookupFromName(tableName, itemName)
+    local processed = false
+
+    local function onMatch(matchedFeature)
+        if self:_categoryMatch(item:try_get("category") or "", matchedFeature:try_get("categories") or {}) then
             writeLog(string.format("Adding %s [%s].", tableName, itemName), STATUS.IMPL)
             self:_addLevelChoice(matchedFeature.guid, itemId, matchedFeature)
             return true
         end
+        return false
+    end
+
+    if itemId then
+        writeLog("Found match in Codex.")
+        processed = self:_findMatchingFeature(choiceType, self.availableFeatures, onMatch)
     else
         writeLog(string.format("!!!! %s [%s] not found in Codex.", tableName, itemName), STATUS.WARN)
     end
-    return false
+
+    return processed
 end
 
 --- Checks if an available feature passes the current filter criteria
@@ -283,25 +297,50 @@ end
 --- Recursively searches available features to find a feature matching the specified choice type
 --- @param choiceType string The type of choice to find (e.g., "CharacterSkillChoice")
 --- @param availableFeatures table The list of available features to search
---- @return table|nil matchedFeature The matching feature if found, nil otherwise
+--- @param onMatch function Callback function for each match; return true to stop; false to continue
+--- @param filterMatched? boolean Whether we're processing under a node that matched our filter
+--- @return boolean processed Whether the callback processed the feature / stop processing
 --- @private
-function FSCIChoiceImporter:_findMatchingFeature(choiceType, availableFeatures)
+function FSCIChoiceImporter:_findMatchingFeature(choiceType, availableFeatures, onMatch, filterMatched)
+    filterMatched = filterMatched or false
+
     writeDebug("FINDMATCHINGFEATURE:: START:: %s %s", choiceType, json(availableFeatures))
 
-    local matchedFeature = nil
+    local processed = false
 
     for _, availableFeature in pairs(availableFeatures) do
-        if sanitizedStringsMatch(choiceType, availableFeature.typeName) and self:_filterMatch(availableFeature) then
-            matchedFeature = availableFeature
-        else
+        writeLog(string.format("Checking feature type %s name %s", availableFeature.typeName, availableFeature.name), STATUS.INFO, 1)
+
+        local passesFilter = filterMatched or self:_filterMatch(availableFeature)
+
+        if passesFilter and sanitizedStringsMatch(choiceType, availableFeature.typeName) then
+            writeLog("Potential match...")
+            processed = onMatch(availableFeature)
+        end
+        if not processed then
             local nestedFeatures = availableFeature:try_get("features")
             if nestedFeatures then
-                matchedFeature = self:_findMatchingFeature(choiceType, nestedFeatures)
+                processed = self:_findMatchingFeature(choiceType, nestedFeatures, onMatch, passesFilter)
             end
         end
-        if matchedFeature then break end
+        writeLog(string.format("End feature type %s", availableFeature.typeName), STATUS.INFO, -1)
+        if processed then break end
     end
 
-    writeDebug("FINDMATCHINGFEATURE:: COMPLETE:: %s", json(matchedFeature))
-    return matchedFeature
+    writeDebug("FINDMATCHINGFEATURE:: COMPLETE:: %s", tostring(processed))
+    return processed
+end
+
+--- Determines whether any of the values by string in selected are in the flag list available
+--- @param selected string The category name to match
+--- @param available table Flag list of available categories
+--- @return boolean foundMatch True if the available list is empty or we found a match
+function FSCIChoiceImporter:_categoryMatch(selected, available)
+    local foundMatch = true
+
+    if next(available) then
+        foundMatch = available[selected]
+    end
+
+    return foundMatch
 end

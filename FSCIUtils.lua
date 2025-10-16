@@ -2,7 +2,7 @@ FSCIUtils = RegisterGameType("FSCIUtils")
 FSCIUtils.__index = FSCIUtils
 
 local FSCI_DEBUG = true
-local FSCI_VERBOSE = false
+local FSCI_VERBOSE = true
 
 --- Status flags for `FSCIUtils.writeLog()`
 --- These control both logging behavior and text coloring
