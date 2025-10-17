@@ -1,7 +1,7 @@
 FSCIUtils = RegisterGameType("FSCIUtils")
 FSCIUtils.__index = FSCIUtils
 
-local FSCI_DEBUG = true
+local FSCI_DEBUG = false
 local FSCI_VERBOSE = false
 
 --- Status flags for `FSCIUtils.writeLog()`

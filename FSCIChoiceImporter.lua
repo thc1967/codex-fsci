@@ -270,9 +270,9 @@ function FSCIChoiceImporter:_processTableLookupChoice(tableName, choiceType, ite
         local categories = matchedFeature:try_get("categories")
         local itemCategory = item:try_get("category") or ""
 
-        if itemName == "Empathize" or itemName == "Interrogate" or itemName == "Criminal Underworld" then
-            writeDebug("ONMATCH:: %s(%s) cats %s ind %s f %s", itemName, itemCategory, json(categories), json(individualSkills), json(matchedFeature))
-        end
+        -- if itemName == "Empathize" or itemName == "Interrogate" or itemName == "Criminal Underworld" then
+        --     writeDebug("ONMATCH:: %s(%s) cats %s ind %s f %s", itemName, itemCategory, json(categories), json(individualSkills), json(matchedFeature))
+        -- end
 
         local shouldAdd = false
 
@@ -292,9 +292,9 @@ function FSCIChoiceImporter:_processTableLookupChoice(tableName, choiceType, ite
 
         if shouldAdd then
             writeLog(string.format("Adding %s [%s].", tableName, itemName), STATUS.IMPL)
-            if itemName == "Empathize" or itemName == "Interrogate" or matchedFeature.guid:find("79e51e4632e4") then
-                writeDebug("ONMATCH:: Adding %s [%s] match GUID [%s] itemId [%s]", tableName, itemName, matchedFeature.guid, itemId)
-            end
+            -- if itemName == "Empathize" or itemName == "Interrogate" or matchedFeature.guid:find("79e51e4632e4") then
+            --     writeDebug("ONMATCH:: Adding %s [%s] match GUID [%s] itemId [%s]", tableName, itemName, matchedFeature.guid, itemId)
+            -- end
             self:_addLevelChoice(matchedFeature.guid, itemId, matchedFeature)
         end
 
