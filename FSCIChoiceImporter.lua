@@ -5,6 +5,7 @@
 --- @field levelChoices table The calculated list of selected features formatted for the character
 --- @field featureData table The full feature objects keyed by GUID
 --- @field filter table Optional filter for feature processing (e.g., { description = "War Domain" })
+--- @field staticSkills table The list of all static skills found in the availableFeatures
 FSCIChoiceImporter = RegisterGameType("FSCIChoiceImporter")
 FSCIChoiceImporter.__index = FSCIChoiceImporter
 
@@ -28,6 +29,11 @@ function FSCIChoiceImporter:new(availableFeatures, filter)
                 instance.levelChoices = {}
                 instance.featureData = {}
                 instance.filter = filter or {}
+                instance.staticSkills = {}
+
+                instance:_processStaticSkills(availableFeatures)
+                writeDebug("STATICSKILLS:: %s", json(instance.staticSkills))
+                
                 return instance
             end
         end
@@ -36,6 +42,30 @@ function FSCIChoiceImporter:new(availableFeatures, filter)
     writeLog("No features to process.", STATUS.INFO)
     writeDebug("FSCICHOICEIMPORTER:: NEW:: Nothing to process.")
     return nil
+end
+
+--- Find all the GUIDs for all static skills in the available features.
+--- This enables defensive logic to try to prevent Forge Steel treating
+--- static skills as choices from breaking characters.
+--- @param features table List of features to process
+--- @private
+function FSCIChoiceImporter:_processStaticSkills(features)
+    for _, feature in ipairs(features) do
+        if feature.typeName == "CharacterFeature" then
+            if feature:try_get("modifiers") and #feature.modifiers > 0 then
+                for _, modifier in ipairs(feature.modifiers) do
+                    if modifier:try_get("skills") and next(modifier.skills) then
+                        for skillId, _ in pairs(modifier.skills) do
+                            self.staticSkills[skillId] = true
+                        end
+                    end
+                end
+            end
+        end
+        if feature:try_get("features") then
+            self:_processStaticSkills(feature.features)
+        end
+    end
 end
 
 --- Processes a single selected feature to build our levelChoices structure

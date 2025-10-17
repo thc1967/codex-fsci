@@ -15,10 +15,10 @@ Dependencies:
 
 Commands.fsci = function(args)
     if args and #args then
-        if string.find(args:lower(), "d") then FSCI_DEBUG = not FSCI_DEBUG end
-        if string.find(args:lower(), "v") then FSCI_VERBOSE = not FSCI_VERBOSE end
+        if string.find(args:lower(), "d") then FSCIUtils.ToggleDebugMode() end
+        if string.find(args:lower(), "v") then FSCIUtils.ToggleVerboseMode() end
     end
-    SendTitledChatMessage(string.format("<color=#00cccc>[d]ebug:</color> %s <color=#00cccc>[v]erbose:</color> %s", FSCI_DEBUG, FSCI_VERBOSE), "fsci", "#e09c9c")
+    SendTitledChatMessage(string.format("<color=#00cccc>[d]ebug:</color> %s <color=#00cccc>[v]erbose:</color> %s", FSCIUtils.GetDebugMode(), FSCIUtils.GetVerboseMode()), "fsci", "#e09c9c")
 end
 
 local function debugWriteToFile(dto)
