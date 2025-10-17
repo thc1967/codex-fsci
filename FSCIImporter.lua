@@ -238,6 +238,9 @@ function FSCIImporter:_importCulture()
     if self.fsData.culture then
         local fsCulture = self.fsData.culture
 
+        if fsCulture.language then
+            fsCulture.languages = fsCulture.language.data.selected
+        end
         if fsCulture.languages then
             for _, language in pairs(fsCulture.languages) do
                 writeLog(string.format("Found Language [%s] in import.", language))
