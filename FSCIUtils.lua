@@ -1,7 +1,7 @@
 FSCIUtils = RegisterGameType("FSCIUtils")
 FSCIUtils.__index = FSCIUtils
 
-local FSCI_DEBUG = false
+local FSCI_DEBUG = true
 local FSCI_VERBOSE = false
 
 --- Status flags for `FSCIUtils.writeLog()`
@@ -59,7 +59,7 @@ local FSCI_TRANSLATIONS = {
     ["Talent Ward"] = "Ward",
 
     -- Skills
-    ["Perform"] = "Performance"
+    -- ["Perform"] = "Performance"
 }
 
 --- Sets the debug mode state.

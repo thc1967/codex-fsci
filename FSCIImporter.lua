@@ -299,39 +299,35 @@ function FSCIImporter:_importIncitingIncident(careerItem)
         return FSCIUtils.SanitizedStringsMatch(needle, s)
     end
 
-    if self.fsData.career and self.fsData.career.incitingIncidents and self.fsData.career.incitingIncidents.selectedID then
-        for _, incident in ipairs(self.fsData.career.incitingIncidents.options) do
-            if FSCIUtils.SanitizedStringsMatch(incident.id, self.fsData.career.incitingIncidents.selectedID) then
-                writeLog(string.format("Found Inciting Incident [%s] in import.", incident.name))
+    if self.fsData.career and self.fsData.career.incitingIncidents and self.fsData.career.incitingIncidents.selected and self.fsData.career.incitingIncidents.selected.name then
+        local incidentName = self.fsData.career.incitingIncidents.selected.name
+        writeLog(string.format("Found Inciting Incident [%s] in import.", incidentName), STATUS.GOOD)
 
-                local foundMatch = false
-                for _, characteristic in pairs(careerItem.characteristics) do
-                    writeDebug(string.format("IMPORTINCITINGINCIDENT:: CHARACTERISTIC type [%s] table [%s]", characteristic.typeName, characteristic.tableid))
-                    if characteristic.typeName == "BackgroundCharacteristic" and characteristic.tableid ~= nil then
-                        local characteristicsTable = dmhub.GetTable(BackgroundCharacteristic.characteristicsTable)
-                        for _, row in pairs(characteristicsTable[characteristic.tableid].rows) do
-                            writeDebug(string.format("IMPORTINCITINGINCIDENT:: row[%s]", row.value.items[1].value))
-                            if incidentNamesMatch(incident.name, row.value.items[1].value) then
-                                writeLog(string.format("Adding Inciting Incident [%s] to character.", incident.name), STATUS.IMPL)
+        local foundMatch = false
+        for _, characteristic in pairs(careerItem.characteristics) do
+            writeDebug(string.format("IMPORTINCITINGINCIDENT:: CHARACTERISTIC type [%s] table [%s]", characteristic.typeName, characteristic.tableid))
+            if characteristic.typeName == "BackgroundCharacteristic" and characteristic.tableid ~= nil then
+                local characteristicsTable = dmhub.GetTable(BackgroundCharacteristic.characteristicsTable)
+                for _, row in pairs(characteristicsTable[characteristic.tableid].rows) do
+                    writeDebug(string.format("IMPORTINCITINGINCIDENT:: row[%s]", row.value.items[1].value))
+                    if incidentNamesMatch(incidentName, row.value.items[1].value) then
+                        writeLog(string.format("Adding Inciting Incident [%s] to character.", incidentName), STATUS.IMPL)
 
-                                local item = row.value.items[1]
-                                local note = {}
-                                note.text = item.value
-                                note.title = "Inciting Incident"
-                                note.rowid = row.id
-                                note.tableid = characteristic.tableid
+                        local item = row.value.items[1]
+                        local note = {}
+                        note.text = item.value
+                        note.title = "Inciting Incident"
+                        note.rowid = row.id
+                        note.tableid = characteristic.tableid
 
-                                local notes = self.character:get_or_add("notes", {})
-                                notes[#notes + 1] = note
+                        local notes = self.character:get_or_add("notes", {})
+                        notes[#notes + 1] = note
 
-                                foundMatch = true
-                                break
-                            end
-                        end
-                        if foundMatch then break end
+                        foundMatch = true
+                        break
                     end
                 end
-                break
+                if foundMatch then break end
             end
         end
     else
