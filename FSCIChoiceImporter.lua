@@ -266,17 +266,39 @@ function FSCIChoiceImporter:_processTableLookupChoice(tableName, choiceType, ite
     local processed = false
 
     local function onMatch(matchedFeature)
-        local categoryMatch = self:_itemInFlagList(item:try_get("category") or "", matchedFeature:try_get("categories") or {})
-        local individualMatch = self:_itemInFlagList(itemId, matchedFeature:try_get("individualSkills") or {})
-        if itemName == "Gymnastics" or itemName == "Escape Artist" then
-            writeDebug("ONMATCH:: %s cat %s ind %s f %s", itemName, categoryMatch, individualMatch, json(matchedFeature))
+        local individualSkills = matchedFeature:try_get("individualSkills")
+        local categories = matchedFeature:try_get("categories")
+        local itemCategory = item:try_get("category") or ""
+
+        if itemName == "Empathize" or itemName == "Interrogate" or itemName == "Criminal Underworld" then
+            writeDebug("ONMATCH:: %s(%s) cats %s ind %s f %s", itemName, itemCategory, json(categories), json(individualSkills), json(matchedFeature))
         end
-        if categoryMatch or individualMatch then
+
+        local shouldAdd = false
+
+        -- Check 1: Is this item explicitly allowed via individualSkills?
+        local inIndividualList = individualSkills and self:_itemInFlagList(itemId, individualSkills)
+        if inIndividualList then
+            shouldAdd = true
+        else
+            -- Check 2: Does this feature have category restrictions?
+            local hasCategoryRestrictions = categories and next(categories) ~= nil
+            if hasCategoryRestrictions then
+                shouldAdd = self:_itemInFlagList(itemCategory, categories)
+            else
+                shouldAdd = true
+            end
+        end
+
+        if shouldAdd then
             writeLog(string.format("Adding %s [%s].", tableName, itemName), STATUS.IMPL)
+            if itemName == "Empathize" or itemName == "Interrogate" or matchedFeature.guid:find("79e51e4632e4") then
+                writeDebug("ONMATCH:: Adding %s [%s] match GUID [%s] itemId [%s]", tableName, itemName, matchedFeature.guid, itemId)
+            end
             self:_addLevelChoice(matchedFeature.guid, itemId, matchedFeature)
-            return true
         end
-        return false
+
+        return shouldAdd
     end
 
     if itemId then
