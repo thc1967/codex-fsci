@@ -304,7 +304,7 @@ function FSCIImporter:_importIncitingIncident(careerItem)
 
     if self.fsData.career and self.fsData.career.incitingIncidents and self.fsData.career.incitingIncidents.selected and self.fsData.career.incitingIncidents.selected.name then
         local incidentName = self.fsData.career.incitingIncidents.selected.name
-        writeLog(string.format("Found Inciting Incident [%s] in import.", incidentName), STATUS.GOOD)
+        writeLog(string.format("Found Inciting Incident [%s] in import.", incidentName))
 
         local foundMatch = false
         for _, characteristic in pairs(careerItem.characteristics) do

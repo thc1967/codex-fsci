@@ -18,7 +18,7 @@ Commands.fsci = function(args)
         if string.find(args:lower(), "d") then FSCIUtils.ToggleDebugMode() end
         if string.find(args:lower(), "v") then FSCIUtils.ToggleVerboseMode() end
     end
-    SendTitledChatMessage(string.format("<color=#00cccc>[d]ebug:</color> %s <color=#00cccc>[v]erbose:</color> %s", FSCIUtils.GetDebugMode(), FSCIUtils.GetVerboseMode()), "fsci", "#e09c9c")
+    SendTitledChatMessage(string.format("<color=#00cccc>[d]ebug:</color> %s <color=#00cccc>[v]erbose:</color> %s", FSCIUtils.inDebugMode(), FSCIUtils.inVerboseMode()), "fsci", "#e09c9c")
 end
 
 local function debugWriteToFile(dto)

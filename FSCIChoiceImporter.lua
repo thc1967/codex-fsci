@@ -148,6 +148,12 @@ end
 --- @param replaceCurrent? boolean Optional. When true, replaces any existing value. When false (default), appends to a table
 --- @private
 function FSCIChoiceImporter:_addLevelChoice(featureGuid, selectedGuid, featureObject, replaceCurrent)
+    -- If the GUID is in our protected list of static features, nope out
+    if self.staticSkills[selectedGuid] then
+        writeDebug("STATICSKILLS:: REJECTING:: %s -> %s %s", featureGuid, selectedGuid, json(self.staticSkills))
+        return
+    end
+
     replaceCurrent = replaceCurrent or false
 
     if replaceCurrent then
@@ -301,7 +307,7 @@ function FSCIChoiceImporter:_processTableLookupChoice(tableName, choiceType, ite
         local itemCategory = item:try_get("category") or ""
 
         local debugReason = ""
-        local debugItemNames = { ["Sneak"] = true, ["Interrogate"]  = true }
+        local debugItemNames = { ["Society"] = true, ["Lead"]  = true }
 
         if debugItemNames[itemName] then
             writeDebug("ONMATCH:: %s(%s) cats %s ind %s f %s", itemName, itemCategory, json(categories), json(individualSkills), json(matchedFeature))
