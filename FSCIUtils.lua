@@ -1,3 +1,6 @@
+--- Utility functions for Forge Steel character import
+--- Provides logging, string matching, translation, and table operations
+--- @class FSCIUtils
 FSCIUtils = RegisterGameType("FSCIUtils")
 FSCIUtils.__index = FSCIUtils
 
@@ -162,6 +165,10 @@ function FSCIUtils.writeLog(message, status, indent)
     end
 end
 
+--- Appends a value to an array within a table, creating the array if needed
+--- @param t table The table containing the array
+--- @param k string The key for the array within the table
+--- @param v any The value to append to the array
 function FSCIUtils.AppendToTable(t, k, v)
     t[k] = t[k] or {}
     table.insert(t[k], v)
@@ -260,11 +267,11 @@ function FSCIUtils.TableLookupFromName(tableName, name)
         if itemFound then return itemFound.id, itemFound end
     end
 
-    CTIEUtils.writeLog(string.format("TLFN fallthrough table [%s]->[%s].", tableName, translatedName), CTIEUtils.STATUS.WARN)
+    FSCIUtils.writeLog(string.format("TLFN fallthrough table [%s]->[%s].", tableName, translatedName), FSCIUtils.STATUS.WARN)
 
     local t = dmhub.GetTable(tableName) or {}
     for id, row in pairs(t) do
-        if not row:try_get("hidden", false) and CTIEUtils.SanitizedStringsMatch(row.name, translatedName) then
+        if not row:try_get("hidden", false) and FSCIUtils.SanitizedStringsMatch(row.name, translatedName) then
             return id, row
         end
     end
@@ -272,6 +279,11 @@ function FSCIUtils.TableLookupFromName(tableName, name)
     return nil, nil
 end
 
+--- Translates feature choice names from Forge Steel to Codex format
+--- Handles special case for "Damage Modifier" by extracting immunity type from description
+--- @param name string The Forge Steel feature choice name
+--- @param description string The feature choice description
+--- @return string The translated feature choice name
 function FSCIUtils.TranslateFeatureChoiceToCodex(name, description)
     local s = name or ""
     if string.lower(s) == "damage modifier" then
@@ -287,95 +299,4 @@ end
 --- @return string The translated string or original if no translation exists
 function FSCIUtils.TranslateFStoCodex(fsString)
     return FSCI_TRANSLATIONS[fsString] or fsString
-end
-
---- FSCIFillFlattener handles flattening hierarchical feature structures from both
---- FSCILeveledChoiceImporter (leveled features) and FSCIChoiceImporter (direct features)
-FSCIFillFlattener = RegisterGameType("FSCIFillFlattener")
-FSCIFillFlattener.__index = FSCIFillFlattener
-
---- Static configuration for target types and properties to keep
-FSCIFillFlattener._targetTypes = {
-    ["CharacterSkillChoice"] = true,
-    ["CharacterFeatChoice"] = true,
-    ["CharacterLanguageChoice"] = true,
-    ["CharacterFeatureChoice"] = true,
-    ["CharacterDeityChoice"] = true,
-    ["CharacterSubclassChoice"] = true
-}
-
-FSCIFillFlattener._propertiesToKeep = {
-    "guid",
-    -- "typeName",
-    "name",
-    "categories",
-    "options"
-}
-
---- Helper function to extract only the properties we want from a feature
---- @param feature table The feature to extract properties from
---- @return table extracted The extracted properties
---- @private
-function FSCIFillFlattener._extractProperties(feature)
-    FSCIUtils.writeDebug("CLASSFILL:: EXTRACT:: %s", json(feature))
-    local extracted = {
-        __typeName = feature.typeName
-    }
-    for _, prop in ipairs(FSCIFillFlattener._propertiesToKeep) do
-        if feature:try_get(prop) then
-            extracted[prop] = feature[prop]
-        end
-    end
-    return extracted
-end
-
---- Recursive function to process features at any level
---- @param features table Array of features to process
---- @param result table Array to store results in
---- @private
-function FSCIFillFlattener._processFeatures(features, result)
-    if not features then return end
-
-    for _, feature in pairs(features) do
-        -- Check if this feature is a target type we want to keep
-        if feature.typeName and FSCIFillFlattener._targetTypes[feature.typeName] then
-            table.insert(result, FSCIFillFlattener._extractProperties(feature))
-        end
-
-        -- Recursively process nested features
-        FSCIUtils.writeDebug("CLASSFILL:: FEATURE:: %s", json(feature))
-        if feature:try_get("features") then
-            FSCIFillFlattener._processFeatures(feature.features, result)
-        end
-    end
-end
-
---- Flattens leveled features structure (for FSCILeveledChoiceImporter data)
---- @param leveledFeatures table Array of level objects, each containing features
---- @return table Flat array of filtered feature objects
-function FSCIFillFlattener.FlattenLeveledFeatures(leveledFeatures)
-    local result = {}
-
-    if leveledFeatures then
-        for _, level in pairs(leveledFeatures) do
-            if level.features and next(level.features) then
-                FSCIFillFlattener._processFeatures(level.features, result)
-            end
-        end
-    end
-
-    return result
-end
-
---- Flattens direct features structure (for FSCIChoiceImporter data)
---- @param features table Array of feature objects
---- @return table Flat array of filtered feature objects
-function FSCIFillFlattener.FlattenFeatures(features)
-    local result = {}
-
-    if features then
-        FSCIFillFlattener._processFeatures(features, result)
-    end
-
-    return result
 end

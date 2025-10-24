@@ -33,6 +33,9 @@ function FSCIImporter:new(jsonText)
         return nil
     end
 
+    -- We don't need this and it can be big.
+    parsedData.picture = nil
+
     local instance = setmetatable({}, self)
     instance.fsJson = jsonText
     instance.fsData = parsedData
@@ -41,6 +44,8 @@ function FSCIImporter:new(jsonText)
     return instance
 end
 
+--- Orchestrates the complete character import process
+--- Imports token information, character data, and submits to VTT
 function FSCIImporter:Import()
     writeDebug("FSCIIMPORTER:: IMPORT:: START::")
     writeLog("Import starting.")
@@ -54,6 +59,9 @@ function FSCIImporter:Import()
     writeDebug("FSCIIMPORTER:: IMPORT:: COMPLETE::")
 end
 
+--- Creates and populates the basic token structure for the new character
+--- Initializes token properties and assigns to default party
+--- @private
 function FSCIImporter:_importTokenInfo()
     writeDebug("FSCIIMPORTER:: IMPORTTOKEN:: START::")
     writeLog("Import Token starting.", STATUS.INFO, 1)
@@ -62,13 +70,15 @@ function FSCIImporter:_importTokenInfo()
     self.token.properties = character.CreateNew()
     self.token.partyId = GetDefaultPartyID()
     self.token.name = self.fsData.name
-
     writeLog(string.format("Character Name is [%s].", self.token.name), STATUS.IMPL)
 
     writeLog("Import Token complete.", STATUS.INFO, -1)
     writeDebug("FSCIIMPORTER:: IMPORTTOKEN:: COMPLETE::")
 end
 
+--- Coordinates all character data imports
+--- Processes attributes, ancestry, culture, career, class, and complication
+--- @private
 function FSCIImporter:_importCharacterInfo()
     writeDebug("IMPORTCHARACTER:: START::")
     writeLog("Import Character starting.", STATUS.INFO, 1)
@@ -87,6 +97,9 @@ function FSCIImporter:_importCharacterInfo()
     writeDebug("IMPORTCHARACTER:: COMPLETE::")
 end
 
+--- Imports character attributes from Forge Steel characteristics
+--- Maps Forge Steel characteristic names to Codex attribute short names
+--- @private
 function FSCIImporter:_importAttributes()
     writeDebug("IMPORTATTRIBUTES:: START::")
     writeLog("Import Attributes starting.", STATUS.INFO, 1)
@@ -127,6 +140,9 @@ function FSCIImporter:_importAttributes()
     writeDebug("IMPORTATTRIBUTES:: COMPLETE::")
 end
 
+--- Imports character ancestry and processes ancestry feature choices
+--- Maps Forge Steel ancestry to Codex race and imports selected features
+--- @private
 function FSCIImporter:_importAncestry()
     writeDebug("IMPORTANCESTRY:: START::")
     writeLog("Import Ancestry starting.", STATUS.INFO, 1)
@@ -166,6 +182,9 @@ function FSCIImporter:_importAncestry()
     writeDebug("IMPORTANCESTRY:: COMPLETE::")
 end
 
+--- Imports character career (background) and processes career feature choices
+--- Maps Forge Steel career to Codex background and triggers inciting incident import
+--- @private
 function FSCIImporter:_importCareer()
     writeDebug("IMPORTCAREER:: START::")
     writeLog("Import Career starting.", STATUS.INFO, 1)
@@ -205,6 +224,9 @@ function FSCIImporter:_importCareer()
     writeDebug("IMPORTCAREER:: COMPLETE::")
 end
 
+--- Delegates class import to FSCIClassImporter
+--- Handles all class-related data including levels, abilities, and kits
+--- @private
 function FSCIImporter:_importClass()
     if self.fsData.class then
         local classImporter = FSCIClassImporter:new(self.fsData.class, self.character)
@@ -214,6 +236,9 @@ function FSCIImporter:_importClass()
     end
 end
 
+--- Imports character complication
+--- Maps Forge Steel complication to Codex complication
+--- @private
 function FSCIImporter:_importComplication()
     writeDebug("IMPORTCOMPLICATION:: START::")
     writeDebug("Import Complication starting.", STATUS.INFO, 1)
@@ -231,6 +256,9 @@ function FSCIImporter:_importComplication()
     writeDebug("IMPORTCOMPLICATION:: COMPLETE::")
 end
 
+--- Imports character culture including languages and three culture aspects
+--- Processes environment, organization, and upbringing aspects with their feature choices
+--- @private
 function FSCIImporter:_importCulture()
     writeDebug("IMPORTCULTURE:: START::")
     writeLog("Import Culture starting.", STATUS.INFO, 1)
@@ -294,6 +322,10 @@ function FSCIImporter:_importCulture()
     writeDebug("IMPORTCULTURE:: COMPLETE::")
 end
 
+--- Imports the inciting incident from career data
+--- Searches career characteristics table for matching incident and adds as character note
+--- @param careerItem table The Codex career (background) item containing characteristics
+--- @private
 function FSCIImporter:_importIncitingIncident(careerItem)
     writeDebug("IMPORTINCITINGINCIDENT:: START::")
 
@@ -340,6 +372,9 @@ function FSCIImporter:_importIncitingIncident(careerItem)
     writeDebug("IMPORTINCITINGINCIDENT:: COMPELTE::")
 end
 
+--- Stores the original import JSON in the character for future reference
+--- Skipped in debug mode to avoid polluting test data
+--- @private
 function FSCIImporter:_setImport()
     if not FSCIUtils.inDebugMode() then
         writeLog("Setting Import.", STATUS.IMPL)
